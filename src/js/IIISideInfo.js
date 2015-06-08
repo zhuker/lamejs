@@ -1,4 +1,5 @@
 //package mp3;
+GrInfo = require('./GrInfo.js');
 
 function IIISideInfo() {
     this.tt = [[null, null], [null, null]];
@@ -14,3 +15,5 @@ function IIISideInfo() {
         }
     }
 }
+
+module.exports = IIISideInfo;

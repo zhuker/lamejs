@@ -29,7 +29,7 @@ BitStream.EQ = function (a, b) {
 };
 
 BitStream.NEQ = function (a, b) {
-    return !EQ(a, b);
+    return !BitStream.EQ(a, b);
 };
 
 function BitStream() {
@@ -1028,3 +1028,5 @@ function BitStream() {
 
 
 }
+
+module.exports = BitStream;

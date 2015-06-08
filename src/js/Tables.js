@@ -512,3 +512,4 @@ Tables.bitrate_table = [
 	 */
 Tables.scfsi_band = [ 0, 6, 11, 16, 21 ];
 
+module.exports = Tables;

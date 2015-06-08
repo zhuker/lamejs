@@ -1,49 +1,64 @@
 //package mp3;
+common = require('./common.js');
+System = common.System;
+VbrMode = common.VbrMode;
+Float = common.Float;
+ShortBlock = common.ShortBlock;
+Util = common.Util;
+Arrays = common.Arrays;
+new_array_n = common.new_array_n;
+new_byte = common.new_byte;
+new_double = common.new_double;
+new_float = common.new_float;
+new_float_n = common.new_float_n;
+new_int = common.new_int;
+new_int_n = common.new_int_n;
+L3Side = require('./L3Side.js');
 
 function GrInfo() {
-	//float xr[] = new float[576];
-	this.xr = new_float(576);
-	//int l3_enc[] = new int[576];
+    //float xr[] = new float[576];
+    this.xr = new_float(576);
+    //int l3_enc[] = new int[576];
     this.l3_enc = new_int(576);
-	//int scalefac[] = new int[L3Side.SFBMAX];
+    //int scalefac[] = new int[L3Side.SFBMAX];
     this.scalefac = new_int(L3Side.SFBMAX);
-	this.xrpow_max = 0.;
+    this.xrpow_max = 0.;
 
-	this.part2_3_length=0;
-	this.big_values=0;
-	this.count1=0;
-	this.global_gain=0;
-	this.scalefac_compress=0;
-	this.block_type=0;
-	this.mixed_block_flag=0;
-	this.table_select = new_int(3);
-	this.subblock_gain = new_int(3 + 1);
-	this.region0_count=0;
-	this.region1_count=0;
-	this.preflag=0;
-	this.scalefac_scale=0;
-	this.count1table_select=0;
+    this.part2_3_length = 0;
+    this.big_values = 0;
+    this.count1 = 0;
+    this.global_gain = 0;
+    this.scalefac_compress = 0;
+    this.block_type = 0;
+    this.mixed_block_flag = 0;
+    this.table_select = new_int(3);
+    this.subblock_gain = new_int(3 + 1);
+    this.region0_count = 0;
+    this.region1_count = 0;
+    this.preflag = 0;
+    this.scalefac_scale = 0;
+    this.count1table_select = 0;
 
-	this.part2_length=0;
-	this.sfb_lmax=0;
-	this.sfb_smin=0;
-	this.psy_lmax=0;
-	this.sfbmax=0;
-	this.psymax=0;
-	this.sfbdivide=0;
-	this.width = new_int(L3Side.SFBMAX);
-	this.window = new_int(L3Side.SFBMAX);
-	this.count1bits=0;
-	/**
-	 * added for LSF
-	 */
-	this.sfb_partition_table = null;
-	this.slen = new_int(4);
+    this.part2_length = 0;
+    this.sfb_lmax = 0;
+    this.sfb_smin = 0;
+    this.psy_lmax = 0;
+    this.sfbmax = 0;
+    this.psymax = 0;
+    this.sfbdivide = 0;
+    this.width = new_int(L3Side.SFBMAX);
+    this.window = new_int(L3Side.SFBMAX);
+    this.count1bits = 0;
+    /**
+     * added for LSF
+     */
+    this.sfb_partition_table = null;
+    this.slen = new_int(4);
 
-	this.max_nonzero_coeff=0;
+    this.max_nonzero_coeff = 0;
 
     var self = this;
-	this.assign = function(other) {
+    this.assign = function (other) {
         self.xr = other.xr.clone();
         self.l3_enc = other.l3_enc.clone();
         self.scalefac = other.scalefac.clone();
@@ -78,5 +93,7 @@ function GrInfo() {
         self.sfb_partition_table = other.sfb_partition_table.clone();
         self.slen = other.slen.clone();
         self.max_nonzero_coeff = other.max_nonzero_coeff;
-	}
+    }
 }
+
+module.exports = GrInfo;

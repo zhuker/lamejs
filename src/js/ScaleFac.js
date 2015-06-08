@@ -6,6 +6,22 @@
  * @author Ken
  *
  */
+
+common = require('./common.js');
+System = common.System;
+VbrMode = common.VbrMode;
+Float = common.Float;
+ShortBlock = common.ShortBlock;
+Util = common.Util;
+Arrays = common.Arrays;
+new_array_n = common.new_array_n;
+new_byte = common.new_byte;
+new_double = common.new_double;
+new_float = common.new_float;
+new_float_n = common.new_float_n;
+new_int = common.new_int;
+new_int_n = common.new_int_n;
+
 function ScaleFac(arrL, arrS, arr21, arr12) {
 
     this.l = new_int(1 + Encoder.SBMAX_l);
@@ -14,8 +30,6 @@ function ScaleFac(arrL, arrS, arr21, arr12) {
     this.psfb12 = new_int(1 + Encoder.PSFB12);
     var l = this.l;
     var s = this.s;
-    var psfb21 = this.psfb21;
-    var psfb12 = this.psfb12;
 
     if (arguments.length == 4) {
         //public ScaleFac(final int[] arrL, final int[] arrS, final int[] arr21,
@@ -24,16 +38,12 @@ function ScaleFac(arrL, arrS, arr21, arr12) {
         this.arrS = arguments[1];
         this.arr21 = arguments[2];
         this.arr12 = arguments[3];
-        var arrL = this.arrL;
-        var arrS = this.arrS;
-        var arr21 = this.arr21;
-        var arr12 = this.arr12;
 
-        System.arraycopy(arrL, 0, l, 0, Math.min(arrL.length, l.length));
-        System.arraycopy(arrS, 0, s, 0, Math.min(arrS.length, s.length));
-        System.arraycopy(arr21, 0, psfb21, 0,
-            Math.min(arr21.length, psfb21.length));
-        System.arraycopy(arr12, 0, psfb12, 0,
-            Math.min(arr12.length, psfb12.length));
+        System.arraycopy(this.arrL, 0, l, 0, Math.min(this.arrL.length, this.l.length));
+        System.arraycopy(this.arrS, 0, s, 0, Math.min(this.arrS.length, this.s.length));
+        System.arraycopy(this.arr21, 0, this.psfb21, 0, Math.min(this.arr21.length, this.psfb21.length));
+        System.arraycopy(this.arr12, 0, this.psfb12, 0, Math.min(this.arr12.length, this.psfb12.length));
     }
 }
+
+module.exports = ScaleFac;

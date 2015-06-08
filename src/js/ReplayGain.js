@@ -1,3 +1,19 @@
+common = require('./common.js');
+System = common.System;
+VbrMode = common.VbrMode;
+Float = common.Float;
+ShortBlock = common.ShortBlock;
+Util = common.Util;
+Arrays = common.Arrays;
+new_array_n = common.new_array_n;
+new_byte = common.new_byte;
+new_double = common.new_double;
+new_float = common.new_float;
+new_float_n = common.new_float_n;
+new_int = common.new_int;
+new_int_n = common.new_int_n;
+GainAnalysis = require('./GainAnalysis.js');
+
 function ReplayGain() {
     this.linprebuf = new_float(GainAnalysis.MAX_ORDER * 2);
     /**
@@ -37,3 +53,5 @@ function ReplayGain() {
     this.B = new_int(0 | (GainAnalysis.STEPS_per_dB * GainAnalysis.MAX_dB));
 
 }
+
+module.exports = ReplayGain;

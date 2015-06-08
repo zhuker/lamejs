@@ -1,3 +1,5 @@
+MPEGMode = require('./MPEGMode.js');
+
 function LameGlobalFlags() {
 
     this.class_id = 0;
@@ -44,7 +46,7 @@ function LameGlobalFlags() {
      * add Xing VBR tag?
      */
     this.bWriteVbrTag = false;
-    ;
+
     /**
      * use lame/mpglib to convert mp3 to wav
      */
@@ -263,3 +265,5 @@ function LameGlobalFlags() {
     /**************************************************************************/
     this.internal_flags = null;
 }
+
+module.exports = LameGlobalFlags;
