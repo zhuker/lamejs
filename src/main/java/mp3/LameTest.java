@@ -77,6 +77,11 @@ public class LameTest {
         int remaining = samples.remaining();
         short[] left = new short[remaining];
         short[] right = new short[remaining];
+        samples.clear();
+        samples.get(left);
+        samples.clear();
+        samples.get(right);
+
         int mp3buf_size = (int) (1.25 * remaining + 7200);
         byte[] mp3buf = new byte[mp3buf_size];
         int mp3bufPos = 0;

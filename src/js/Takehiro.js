@@ -29,10 +29,12 @@
 
 function Takehiro() {
 
-    var qupvt;
+    var qupvt = null;
+    this.qupvt = null;
 
-    this.setModules = function (qupvt) {
-        this.qupvt = qupvt;
+    this.setModules = function (_qupvt) {
+        this.qupvt = _qupvt;
+        qupvt = _qupvt;
     }
 
     function Bits(b) {
@@ -515,9 +517,9 @@ function Takehiro() {
         for (; i > 3; i -= 4) {
             var p;
             /* hack to check if all values <= 1 */
-            throw "TODO: HACK         if ((((long) ix[i - 1] | (long) ix[i - 2] | (long) ix[i - 3] | (long) ix[i - 4]) & 0xffffffffL) > 1L        "
-            if (true) {
-                //if ((((long) ix[i - 1] | (long) ix[i - 2] | (long) ix[i - 3] | (long) ix[i - 4]) & 0xffffffffL) > 1L)
+            //throw "TODO: HACK         if ((((long) ix[i - 1] | (long) ix[i - 2] | (long) ix[i - 3] | (long) ix[i - 4]) & 0xffffffffL) > 1L        "
+            //if (true) {
+            if (((ix[i - 1] | ix[i - 2] | ix[i - 3] | ix[i - 4]) & 0x7fffffff) > 1) {
                 break;
             }
             p = ((ix[i - 4] * 2 + ix[i - 3]) * 2 + ix[i - 2]) * 2 + ix[i - 1];
@@ -579,6 +581,7 @@ function Takehiro() {
         if (0 < a1) {
             var bi = new Bits(bits);
             gi.table_select[0] = choose_table(ix, 0, a1, bi);
+            console.log(gi.table_select[0]);
             bits = bi.bits;
         }
         if (a1 < a2) {
@@ -781,6 +784,8 @@ function Takehiro() {
     const slen2_n = [1, 2, 4, 8, 1, 2, 4, 8, 2, 4, 8, 2, 4, 8, 4, 8];
     const slen1_tab = [0, 0, 0, 0, 3, 1, 1, 1, 2, 2, 2, 3, 3, 3, 4, 4];
     const slen2_tab = [0, 1, 2, 3, 0, 1, 2, 3, 1, 2, 3, 1, 2, 3, 2, 3];
+    Takehiro.slen1_tab = slen1_tab;
+    Takehiro.slen2_tab = slen2_tab;
 
     function scfsi_calc(ch, l3_side) {
         var sfb;

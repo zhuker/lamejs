@@ -2,7 +2,10 @@
 
 /* MPEG modes */
 function MPEGMode(ordinal) {
-    this.ordinal = ordinal;
+    var _ordinal = ordinal;
+    this.ordinal = function () {
+        return _ordinal;
+    }
 }
 
 MPEGMode.STEREO = new MPEGMode(0);

@@ -28,18 +28,25 @@
 
 //import java.util.Arrays;
 VBRQuantize = require('./VBRQuantize.js');
+CalcNoiseResult = require('./CalcNoiseResult.js');
+CalcNoiseData = require('./CalcNoiseData.js');
 
 function Quantize() {
     var bs;
+    this.rv = null;
     var rv;
+    this.qupvt = null;
     var qupvt;
+
     var vbr = new VBRQuantize();
     var tk;
 
     this.setModules = function (_bs, _rv, _qupvt, _tk) {
         bs = _bs;
         rv = _rv;
+        this.rv = _rv;
         qupvt = _qupvt;
+        this.qupvt = _qupvt;
         tk = _tk;
         vbr.setModules(qupvt, tk);
     }
@@ -126,8 +133,8 @@ function Quantize() {
             /* NORM, START or STOP type, but not SHORT blocks */
             var stop = false;
             for (var gsfb = Encoder.PSFB21 - 1; gsfb >= 0 && !stop; gsfb--) {
-                const start = gfc.scalefac_band.psfb21[gsfb];
-                const end = gfc.scalefac_band.psfb21[gsfb + 1];
+                var start = gfc.scalefac_band.psfb21[gsfb];
+                var end = gfc.scalefac_band.psfb21[gsfb + 1];
                 var ath21 = qupvt.athAdjust(ath.adjust, ath.psfb21[gsfb],
                     ath.floor);
 
@@ -148,12 +155,12 @@ function Quantize() {
             for (var block = 0; block < 3; block++) {
                 var stop = false;
                 for (var gsfb = Encoder.PSFB12 - 1; gsfb >= 0 && !stop; gsfb--) {
-                    const start = gfc.scalefac_band.s[12]
+                    var start = gfc.scalefac_band.s[12]
                         * 3
                         + (gfc.scalefac_band.s[13] - gfc.scalefac_band.s[12])
                         * block
                         + (gfc.scalefac_band.psfb12[gsfb] - gfc.scalefac_band.psfb12[0]);
-                    const end = start
+                    var end = start
                         + (gfc.scalefac_band.psfb12[gsfb + 1] - gfc.scalefac_band.psfb12[gsfb]);
                     var ath12 = qupvt.athAdjust(ath.adjust, ath.psfb12[gsfb],
                         ath.floor);

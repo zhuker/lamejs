@@ -7,6 +7,7 @@ QuantizePVT = require('./QuantizePVT.js');
 Quantize = require('./Quantize.js');
 Takehiro = require('./Takehiro.js');
 Reservoir = require('./Reservoir.js');
+MPEGMode = require('./MPEGMode.js');
 
 function GetAudio() {
     var parse;

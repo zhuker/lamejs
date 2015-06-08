@@ -757,7 +757,7 @@ function PsyModel() {
 
             gfc.nb_s2[chn][b] = gfc.nb_s1[chn][b];
             gfc.nb_s1[chn][b] = ecb;
-            if (!(thr[b]>=0)) {
+            if (!(thr[b] >= 0)) {
                 console.log('aaaa', thr[b]);
             }
             assert(thr[b] >= 0);
@@ -891,7 +891,6 @@ function PsyModel() {
     }
 
     function calc_energy(gfc, fftenergy, eb, max, avg) {
-        console.log('calc_energy');
         var b, j;
 
         for (b = j = 0; b < gfc.npart_l; ++b) {
@@ -899,7 +898,6 @@ function PsyModel() {
             var i;
             for (i = 0; i < gfc.numlines_l[b]; ++i, ++j) {
                 var el = fftenergy[j];
-                console.log('ololo', el);
                 assert(el >= 0);
                 ebb += el;
                 if (m < el)
@@ -908,16 +906,11 @@ function PsyModel() {
             eb[b] = ebb;
             max[b] = m;
             avg[b] = ebb * gfc.rnumlines_l[b];
-            try {
-                console.log(b, gfc.rnumlines_l[b]);
-                assert(gfc.rnumlines_l[b] >= 0);
-                assert(ebb >= 0);
-                assert(eb[b] >= 0);
-                assert(max[b] >= 0);
-                assert(avg[b] >= 0);
-            } catch (e) {
-                console.log(e);
-            }
+            assert(gfc.rnumlines_l[b] >= 0);
+            assert(ebb >= 0);
+            assert(eb[b] >= 0);
+            assert(max[b] >= 0);
+            assert(avg[b] >= 0);
         }
     }
 

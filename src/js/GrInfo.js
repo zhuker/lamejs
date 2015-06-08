@@ -59,9 +59,9 @@ function GrInfo() {
 
     var self = this;
     this.assign = function (other) {
-        self.xr = other.xr.clone();
-        self.l3_enc = other.l3_enc.clone();
-        self.scalefac = other.scalefac.clone();
+        self.xr = other.xr.slice(0); //clone();
+        self.l3_enc = other.l3_enc.slice(0); //clone();
+        self.scalefac = other.scalefac.slice(0); //clone();
         self.xrpow_max = other.xrpow_max;
 
         self.part2_3_length = other.part2_3_length;
@@ -71,8 +71,8 @@ function GrInfo() {
         self.scalefac_compress = other.scalefac_compress;
         self.block_type = other.block_type;
         self.mixed_block_flag = other.mixed_block_flag;
-        self.table_select = other.table_select.clone();
-        self.subblock_gain = other.subblock_gain.clone();
+        self.table_select = other.table_select.slice(0); //clone();
+        self.subblock_gain = other.subblock_gain.slice(0); //.clone();
         self.region0_count = other.region0_count;
         self.region1_count = other.region1_count;
         self.preflag = other.preflag;
@@ -86,12 +86,12 @@ function GrInfo() {
         self.sfbmax = other.sfbmax;
         self.psymax = other.psymax;
         self.sfbdivide = other.sfbdivide;
-        self.width = other.width.clone();
-        self.window = other.window.clone();
+        self.width = other.width.slice(0); //.clone();
+        self.window = other.window.slice(0); //.clone();
         self.count1bits = other.count1bits;
 
-        self.sfb_partition_table = other.sfb_partition_table.clone();
-        self.slen = other.slen.clone();
+        self.sfb_partition_table = other.sfb_partition_table.slice(0); //.clone();
+        self.slen = other.slen.slice(0); //.clone();
         self.max_nonzero_coeff = other.max_nonzero_coeff;
     }
 }

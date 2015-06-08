@@ -41,7 +41,7 @@ function QuantizePVT() {
         return pow20[x + QuantizePVT.Q_MAX2];
     }
 
-    function IPOW20(x) {
+    this.IPOW20 = function (x) {
         assert(0 <= x && x < QuantizePVT.Q_MAX);
         return ipow20[x];
     }
@@ -60,6 +60,7 @@ function QuantizePVT() {
 
     var Q_MAX = (256 + 1);
 
+
     /**
      * <CODE>
      * minimum possible number of
@@ -71,6 +72,8 @@ function QuantizePVT() {
      * </CODE>
      */
     var Q_MAX2 = 116;
+    QuantizePVT.Q_MAX = Q_MAX;
+    QuantizePVT.Q_MAX2 = Q_MAX2;
 
     var LARGE_BITS = 100000;
 
@@ -86,7 +89,7 @@ function QuantizePVT() {
      *
      * [table_number][row_in_table][column of nr_of_sfb]
      */
-    var nr_of_sfb_block = [
+    this.nr_of_sfb_block = [
         [[6, 5, 5, 5], [9, 9, 9, 9], [6, 9, 9, 9]],
         [[6, 5, 7, 3], [9, 9, 12, 6], [6, 9, 12, 6]],
         [[11, 10, 0, 0], [18, 18, 0, 0], [15, 18, 0, 0]],
@@ -99,6 +102,7 @@ function QuantizePVT() {
      */
     var pretab = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1,
         2, 2, 3, 3, 3, 2, 0];
+    this.pretab = pretab;
 
     /**
      * Here are MPEG1 Table B.8 and MPEG2 Table B.1 -- Layer III scalefactor
@@ -180,6 +184,7 @@ function QuantizePVT() {
     var pow43 = new_float(PRECALC_SIZE);
 
     var adj43 = new_float(PRECALC_SIZE);
+    this.adj43 = adj43;
 
     /**
      * <PRE>
@@ -413,7 +418,7 @@ function QuantizePVT() {
             targ_bits[ch] = Math.min(LameInternalFlags.MAX_BITS_PER_CHANNEL,
                 tbits / gfc.channels_out);
 
-            add_bits[ch] = (int)(targ_bits[ch] * pe[gr][ch] / 700.0 - targ_bits[ch]);
+            add_bits[ch] = 0 | (targ_bits[ch] * pe[gr][ch] / 700.0 - targ_bits[ch]);
 
             /* at most increase bits by 1.5*average */
             if (add_bits[ch] > mean_bits * 3 / 4)
@@ -471,7 +476,7 @@ function QuantizePVT() {
 
         /* number of bits to move from side channel to mid channel */
         /* move_bits = fac*targ_bits[1]; */
-        var move_bits = (int)(fac * .5 * (targ_bits[0] + targ_bits[1]));
+        var move_bits = 0 | (fac * .5 * (targ_bits[0] + targ_bits[1]));
 
         if (move_bits > LameInternalFlags.MAX_BITS_PER_CHANNEL - targ_bits[0]) {
             move_bits = LameInternalFlags.MAX_BITS_PER_CHANNEL - targ_bits[0];
@@ -798,7 +803,7 @@ function QuantizePVT() {
                 }
 
                 var sl = new StartLine(j);
-                noise = calc_noise_core(cod_info, sl, l, step);
+                noise = this.calc_noise_core(cod_info, sl, l, step);
                 j = sl.s;
 
                 if (prev_noise != null) {
@@ -828,7 +833,7 @@ function QuantizePVT() {
             if (noise > 0.0) {
                 var tmp;
 
-                tmp = Math.max((int)(noise * 10 + .5), 1);
+                tmp = Math.max(0 | (noise * 10 + .5), 1);
                 res.over_SSD += tmp * tmp;
 
                 over++;

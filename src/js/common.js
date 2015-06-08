@@ -54,7 +54,6 @@ function new_array_n(args) {
     return A;
 }
 
-
 function new_byte(count) {
     return new_int(count);
 }

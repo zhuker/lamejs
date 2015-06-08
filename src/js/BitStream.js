@@ -22,6 +22,8 @@
  * $Id: BitStream.java,v 1.23 2011/05/24 22:02:42 kenchis Exp $
  */
 //package mp3;
+Takehiro = require('./Takehiro.js');
+
 BitStream.EQ = function (a, b) {
     return (Math.abs(a) > Math.abs(b)) ? (Math.abs((a) - (b)) <= (Math
         .abs(a) * 1e-6))
@@ -33,7 +35,7 @@ BitStream.NEQ = function (a, b) {
 };
 
 function BitStream() {
-
+    var self = this;
     var CRC16_POLYNOMIAL = 0x8005;
 
     /*
@@ -265,7 +267,7 @@ function BitStream() {
 
         l3_side = gfc.l3_side;
         gfc.header[gfc.h_ptr].ptr = 0;
-        Arrays.fill_byte(gfc.header[gfc.h_ptr].buf, 0, gfc.sideinfo_len, 0);
+        Arrays.fill(gfc.header[gfc.h_ptr].buf, 0, gfc.sideinfo_len, 0);
         if (gfp.out_samplerate < 16000)
             writeheader(gfc, 0xffe, 12);
         else
@@ -521,6 +523,10 @@ function BitStream() {
 
                 if (x2 > 14) {
                     var linbits_x2 = x2 - 15;
+                    console.log(linbits_x2 , h.linmax, tableindex);
+                    if (linbits_x2 > h.linmax) {
+                        console.log("OLOLO", linbits_x2 , h.linmax, tableindex);
+                    }
                     assert(linbits_x2 <= h.linmax);
                     ext <<= linbits;
                     ext |= linbits_x2;
@@ -740,7 +746,7 @@ function BitStream() {
          * are not necessary to decode the last frame, but some decoders will
          * ignore last frame if these bits are missing
          */
-        bitsPerFrame = getframebits(gfp);
+        bitsPerFrame = self.getframebits(gfp);
         flushbits += bitsPerFrame;
         total_bytes_output.total += bitsPerFrame;
         /* round up: */
@@ -840,7 +846,7 @@ function BitStream() {
         var l3_side;
         l3_side = gfc.l3_side;
 
-        var bitsPerFrame = getframebits(gfp);
+        var bitsPerFrame = this.getframebits(gfp);
         drain_into_ancillary(gfp, l3_side.resvDrain_pre);
 
         encodeSideInfo2(gfp, bitsPerFrame);
