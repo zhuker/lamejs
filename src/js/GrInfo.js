@@ -58,10 +58,16 @@ function GrInfo() {
     this.max_nonzero_coeff = 0;
 
     var self = this;
+    function clone_int(array) {
+        return new Int32Array(array);
+    }
+    function clone_float(array) {
+        return new Float32Array(array);
+    }
     this.assign = function (other) {
-        self.xr = other.xr.slice(0); //clone();
-        self.l3_enc = other.l3_enc.slice(0); //clone();
-        self.scalefac = other.scalefac.slice(0); //clone();
+        self.xr = clone_float(other.xr); //.slice(0); //clone();
+        self.l3_enc = clone_int(other.l3_enc); //.slice(0); //clone();
+        self.scalefac = clone_int(other.scalefac);//.slice(0); //clone();
         self.xrpow_max = other.xrpow_max;
 
         self.part2_3_length = other.part2_3_length;
@@ -71,8 +77,8 @@ function GrInfo() {
         self.scalefac_compress = other.scalefac_compress;
         self.block_type = other.block_type;
         self.mixed_block_flag = other.mixed_block_flag;
-        self.table_select = other.table_select.slice(0); //clone();
-        self.subblock_gain = other.subblock_gain.slice(0); //.clone();
+        self.table_select = clone_int(other.table_select);//.slice(0); //clone();
+        self.subblock_gain = clone_int(other.subblock_gain); //.slice(0); //.clone();
         self.region0_count = other.region0_count;
         self.region1_count = other.region1_count;
         self.preflag = other.preflag;
@@ -86,12 +92,12 @@ function GrInfo() {
         self.sfbmax = other.sfbmax;
         self.psymax = other.psymax;
         self.sfbdivide = other.sfbdivide;
-        self.width = other.width.slice(0); //.clone();
-        self.window = other.window.slice(0); //.clone();
+        self.width = clone_int(other.width); //.slice(0); //.clone();
+        self.window = clone_int(other.window); //.slice(0); //.clone();
         self.count1bits = other.count1bits;
 
         self.sfb_partition_table = other.sfb_partition_table.slice(0); //.clone();
-        self.slen = other.slen.slice(0); //.clone();
+        self.slen = clone_int(other.slen); //.slice(0); //.clone();
         self.max_nonzero_coeff = other.max_nonzero_coeff;
     }
 }

@@ -599,7 +599,6 @@ function Takehiro() {
         if (0 < a1) {
             var bi = new Bits(bits);
             gi.table_select[0] = choose_table(ix, 0, a1, bi);
-            console.log(gi.table_select[0]);
             bits = bi.bits;
         }
         if (a1 < a2) {

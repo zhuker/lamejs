@@ -771,9 +771,6 @@ function PsyModel() {
 
             gfc.nb_s2[chn][b] = gfc.nb_s1[chn][b];
             gfc.nb_s1[chn][b] = ecb;
-            if (!(thr[b] >= 0)) {
-                console.log('aaaa', thr[b]);
-            }
             assert(thr[b] >= 0);
         }
         for (; b <= Encoder.CBANDS; ++b) {

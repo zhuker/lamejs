@@ -118,6 +118,9 @@ for (var i = 0; i < _sz; i++) {
     console.log(mp3buf[i]);
 }
 
+fs.writeFileSync("testjs.mp3", new Buffer(new Int8Array(mp3buf.buffer, 0, _sz)));
+
 _sz = lame.lame_encode_flush(gfp, mp3buf, mp3bufPos, mp3buf_size);
 console.log("lame_encode_flush: " + _sz);
+fs.appendFileSync("testjs.mp3", new Buffer(new Int8Array(mp3buf.buffer, 0, _sz)));
 

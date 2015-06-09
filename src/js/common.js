@@ -1,24 +1,23 @@
-function new_int(count) {
-    var a = new Array(count);
-    for (var i = 0; i < count; i++) {
-        a[i] = 0;
-    }
-    return a;
+function new_byte(count) {
+    return new Int8Array(count);
 }
+
 function new_short(count) {
-    return new_int(count);
+    return new Int16Array(count);
 }
+
+function new_int(count) {
+    return new Int32Array(count);
+}
+
 function new_float(count) {
-    count = 0 | count;
-    var a = new Array(count);
-    for (var i = 0; i < count; i++) {
-        a[i] = 0.;
-    }
-    return a;
+    return new Float32Array(count);
 }
+
 function new_double(count) {
-    return new_float(count);
+    return new Float64Array(count);
 }
+
 function new_float_n(args) {
     if (args.length == 1) {
         return new_float(args[0]);
@@ -70,9 +69,6 @@ function new_array_n(args) {
     return A;
 }
 
-function new_byte(count) {
-    return new_int(count);
-}
 
 var Arrays = {};
 

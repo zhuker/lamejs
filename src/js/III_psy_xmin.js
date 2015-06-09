@@ -13,7 +13,6 @@ var new_float = common.new_float;
 var new_float_n = common.new_float_n;
 var new_int = common.new_int;
 var new_int_n = common.new_int_n;
-console.log(Encoder);
 function III_psy_xmin() {
     this.l = new_float(Encoder.SBMAX_l);
     this.s = new_float_n([Encoder.SBMAX_s, 3]);

@@ -172,7 +172,6 @@ function BitStream() {
     function drain_into_ancillary(gfp, remainingBits) {
         var gfc = gfp.internal_flags;
         var i;
-        console.log('remainingBits', remainingBits);
         assert(remainingBits >= 0);
 
         if (remainingBits >= 8) {
@@ -517,10 +516,6 @@ function BitStream() {
 
                 if (x2 > 14) {
                     var linbits_x2 = x2 - 15;
-                    console.log(linbits_x2 , h.linmax, tableindex);
-                    if (linbits_x2 > h.linmax) {
-                        console.log("OLOLO", linbits_x2 , h.linmax, tableindex);
-                    }
                     assert(linbits_x2 <= h.linmax);
                     ext <<= linbits;
                     ext |= linbits_x2;

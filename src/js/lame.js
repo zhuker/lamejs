@@ -1226,7 +1226,6 @@ function Lame() {
                 break;
             }
         }
-        console.log(gfp.scale);
         assert(gfp.scale >= 0);
         /* initialize default values common for all modes */
 
@@ -1279,7 +1278,6 @@ function Lame() {
 
         /* initialize internal qval settings */
         lame_init_qval(gfp);
-        console.log(gfp.scale);
         assert(gfp.scale >= 0);
         /*
          * automatic ATH adjustment on
@@ -1329,7 +1327,6 @@ function Lame() {
         if (gfp.internal_flags.nsPsy.attackthre_s < 0)
             gfp.internal_flags.nsPsy.attackthre_s = PsyModel.NSATTACKTHRE_S;
 
-        console.log(gfp.scale);
         assert(gfp.scale >= 0);
 
         if (gfp.scale < 0)
