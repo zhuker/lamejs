@@ -73,8 +73,14 @@ function new_array_n(args) {
 var Arrays = {};
 
 Arrays.fill = function (a, fromIndex, toIndex, val) {
-    for (var i = fromIndex; i < toIndex; i++) {
-        a[i] = val;
+    if (arguments.length == 2) {
+        for (var i = 0; i < a.length; i++) {
+            a[i] = arguments[1];
+        }
+    } else {
+        for (var i = fromIndex; i < toIndex; i++) {
+            a[i] = val;
+        }
     }
 };
 

@@ -90,12 +90,12 @@ function BitStream() {
 
         /* main encoding routine toggles padding on and off */
         /* one Layer3 Slot consists of 8 bits */
-        return 8 * ((gfp.version + 1) * 72000 * bit_rate / gfp.out_samplerate + gfc.padding);
+        var bytes = 0 | (gfp.version + 1) * 72000 * bit_rate / gfp.out_samplerate + gfc.padding;
+        return 8 * bytes;
     };
 
     function putheader_bits(gfc) {
-        System.arraycopy(gfc.header[gfc.w_ptr].buf, 0, buf, bufByteIdx,
-            gfc.sideinfo_len);
+        System.arraycopy(gfc.header[gfc.w_ptr].buf, 0, buf, bufByteIdx, gfc.sideinfo_len);
         bufByteIdx += gfc.sideinfo_len;
         totbit += gfc.sideinfo_len * 8;
         gfc.w_ptr = (gfc.w_ptr + 1) & (LameInternalFlags.MAX_HEADER_BUF - 1);
@@ -851,8 +851,7 @@ function BitStream() {
          * what we think the resvsize is:
          */
         if (compute_flushbits(gfp, new TotalBytes()) != gfc.ResvSize) {
-            System.err
-                .println("Internal buffer inconsistency. flushbits <> ResvSize");
+            System.err.println("Internal buffer inconsistency. flushbits <> ResvSize");
         }
 
         /*
@@ -874,10 +873,8 @@ function BitStream() {
                 8 * gfc.sideinfo_len, bits - l3_side.resvDrain_post - 8
                 * gfc.sideinfo_len, bits, bits % 8, bitsPerFrame);
 
-            System.err
-                .println("This is a fatal error.  It has several possible causes:");
-            System.err
-                .println("90%%  LAME compiled with buggy version of gcc using advanced optimizations");
+            System.err.println("This is a fatal error.  It has several possible causes:");
+            System.err.println("90%%  LAME compiled with buggy version of gcc using advanced optimizations");
             System.err.println(" 9%%  Your system is overclocked");
             System.err.println(" 1%%  bug in LAME encoding library");
 
