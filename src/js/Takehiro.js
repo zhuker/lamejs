@@ -25,6 +25,24 @@
 //package mp3;
 
 //import java.util.Arrays;
+var common = require('./common.js');
+var System = common.System;
+var VbrMode = common.VbrMode;
+var Float = common.Float;
+var ShortBlock = common.ShortBlock;
+var Util = common.Util;
+var Arrays = common.Arrays;
+var new_array_n = common.new_array_n;
+var new_byte = common.new_byte;
+var new_double = common.new_double;
+var new_float = common.new_float;
+var new_float_n = common.new_float_n;
+var new_int = common.new_int;
+var new_int_n = common.new_int_n;
+var Encoder = require('./Encoder.js');
+var Tables = require('./Tables.js');
+var GrInfo = require('./GrInfo.js');
+var QuantizePVT = require('./QuantizePVT.js');
 
 
 function Takehiro() {
@@ -41,7 +59,7 @@ function Takehiro() {
         this.bits = 0 | b;
     }
 
-    const subdv_table = [[0, 0], /* 0 bands */
+    var subdv_table = [[0, 0], /* 0 bands */
         [0, 0], /* 1 bands */
         [0, 0], /* 2 bands */
         [0, 0], /* 3 bands */
@@ -80,7 +98,7 @@ function Takehiro() {
      * 01/2004: Optimizations by Gabriel Bouvigne
      */
     function quantize_lines_xrpow_01(l, istep, xr, xrPos, ix, ixPos) {
-        const compareval0 = (1.0 - 0.4054) / istep;
+        var compareval0 = (1.0 - 0.4054) / istep;
 
         assert(l > 0);
         l = l >> 1;
@@ -300,8 +318,8 @@ function Takehiro() {
         var max1 = 0, max2 = 0;
 
         do {
-            const x1 = ix[ixPos++];
-            const x2 = ix[ixPos++];
+            var x1 = ix[ixPos++];
+            var x2 = ix[ixPos++];
             if (max1 < x1)
                 max1 = x1;
 
@@ -315,7 +333,7 @@ function Takehiro() {
 
     function count_bit_ESC(ix, ixPos, end, t1, t2, s) {
         /* ESC-table is used */
-        const linbits = Tables.ht[t1].xlen * 65536 + Tables.ht[t2].xlen;
+        var linbits = Tables.ht[t1].xlen * 65536 + Tables.ht[t2].xlen;
         var sum = 0, sum2;
 
         do {
@@ -356,10 +374,10 @@ function Takehiro() {
     function count_bit_noESC(ix, ixPos, end, s) {
         /* No ESC-words */
         var sum1 = 0;
-        const hlen1 = Tables.ht[1].hlen;
+        var hlen1 = Tables.ht[1].hlen;
 
         do {
-            const x = ix[ixPos + 0] * 2 + ix[ixPos + 1];
+            var x = ix[ixPos + 0] * 2 + ix[ixPos + 1];
             ixPos += 2;
             sum1 += hlen1[x];
         } while (ixPos < end);
@@ -371,7 +389,7 @@ function Takehiro() {
     function count_bit_noESC_from2(ix, ixPos, end, t1, s) {
         /* No ESC-words */
         var sum = 0, sum2;
-        const xlen = Tables.ht[t1].xlen;
+        var xlen = Tables.ht[t1].xlen;
         var hlen;
         if (t1 == 2)
             hlen = Tables.table23;
@@ -379,7 +397,7 @@ function Takehiro() {
             hlen = Tables.table56;
 
         do {
-            const x = ix[ixPos + 0] * xlen + ix[ixPos + 1];
+            var x = ix[ixPos + 0] * xlen + ix[ixPos + 1];
             ixPos += 2;
             sum += hlen[x];
         } while (ixPos < end);
@@ -401,13 +419,13 @@ function Takehiro() {
         var sum1 = 0;
         var sum2 = 0;
         var sum3 = 0;
-        const xlen = Tables.ht[t1].xlen;
-        const hlen1 = Tables.ht[t1].hlen;
-        const hlen2 = Tables.ht[t1 + 1].hlen;
-        const hlen3 = Tables.ht[t1 + 2].hlen;
+        var xlen = Tables.ht[t1].xlen;
+        var hlen1 = Tables.ht[t1].hlen;
+        var hlen2 = Tables.ht[t1 + 1].hlen;
+        var hlen3 = Tables.ht[t1 + 2].hlen;
 
         do {
-            const x = ix[ixPos + 0] * xlen + ix[ixPos + 1];
+            var x = ix[ixPos + 0] * xlen + ix[ixPos + 1];
             ixPos += 2;
             sum1 += hlen1[x];
             sum2 += hlen2[x];
@@ -431,7 +449,7 @@ function Takehiro() {
     /* choose table */
     /*************************************************************************/
 
-    const huf_tbl_noESC = [1, 2, 5, 7, 7, 10, 10, 13, 13,
+    var huf_tbl_noESC = [1, 2, 5, 7, 7, 10, 10, 13, 13,
         13, 13, 13, 13, 13, 13];
 
     /**
@@ -499,7 +517,7 @@ function Takehiro() {
      * count_bit
      */
     this.noquant_count_bits = function (gfc, gi, prev_noise) {
-        const ix = gi.l3_enc;
+        var ix = gi.l3_enc;
         var i = Math.min(576, ((gi.max_nonzero_coeff + 2) >> 1) << 1);
 
         if (prev_noise != null)
@@ -609,10 +627,10 @@ function Takehiro() {
     }
 
     this.count_bits = function (gfc, xr, gi, prev_noise) {
-        const ix = gi.l3_enc;
+        var ix = gi.l3_enc;
 
         /* since quantize_xrpow uses table lookup, we need to check this first: */
-        const w = (QuantizePVT.IXMAX_VAL) / qupvt.IPOW20(gi.global_gain);
+        var w = (QuantizePVT.IXMAX_VAL) / qupvt.IPOW20(gi.global_gain);
 
         if (gi.xrpow_max > w)
             return QuantizePVT.LARGE_BITS;
@@ -622,10 +640,10 @@ function Takehiro() {
         if ((gfc.substep_shaping & 2) != 0) {
             var j = 0;
             /* 0.634521682242439 = 0.5946*2**(.5*0.1875) */
-            const gain = gi.global_gain + gi.scalefac_scale;
-            const roundfac = 0.634521682242439 / qupvt.IPOW20(gain);
+            var gain = gi.global_gain + gi.scalefac_scale;
+            var roundfac = 0.634521682242439 / qupvt.IPOW20(gain);
             for (var sfb = 0; sfb < gi.sfbmax; sfb++) {
-                const width = gi.width[sfb];
+                var width = gi.width[sfb];
                 assert(width >= 0);
                 if (0 == gfc.pseudohalf[sfb]) {
                     j += width;
@@ -652,7 +670,7 @@ function Takehiro() {
         }
 
         for (var r0 = 0; r0 < 16; r0++) {
-            const a1 = gfc.scalefac_band.l[r0 + 1];
+            var a1 = gfc.scalefac_band.l[r0 + 1];
             if (a1 >= bigv)
                 break;
             var r0bits = 0;
@@ -661,7 +679,7 @@ function Takehiro() {
             r0bits = bi.bits;
 
             for (var r1 = 0; r1 < 8; r1++) {
-                const a2 = gfc.scalefac_band.l[r0 + r1 + 2];
+                var a2 = gfc.scalefac_band.l[r0 + r1 + 2];
                 if (a2 >= bigv)
                     break;
                 var bits = r0bits;
@@ -707,7 +725,7 @@ function Takehiro() {
 
     this.best_huffman_divide = function (gfc, gi) {
         var cod_info2 = new GrInfo();
-        const ix = gi.l3_enc;
+        var ix = gi.l3_enc;
         var r01_bits = new_int(7 + 15 + 1);
         var r01_div = new_int(7 + 15 + 1);
         var r0_tbl = new_int(7 + 15 + 1);
@@ -740,7 +758,7 @@ function Takehiro() {
         assert(i <= 576);
 
         for (; i > cod_info2.big_values; i -= 4) {
-            const p = ((ix[i - 4] * 2 + ix[i - 3]) * 2 + ix[i - 2]) * 2
+            var p = ((ix[i - 4] * 2 + ix[i - 3]) * 2 + ix[i - 2]) * 2
                 + ix[i - 1];
             a1 += Tables.t32l[p];
             a2 += Tables.t33l[p];
@@ -780,17 +798,17 @@ function Takehiro() {
         }
     }
 
-    const slen1_n = [1, 1, 1, 1, 8, 2, 2, 2, 4, 4, 4, 8, 8, 8, 16, 16];
-    const slen2_n = [1, 2, 4, 8, 1, 2, 4, 8, 2, 4, 8, 2, 4, 8, 4, 8];
-    const slen1_tab = [0, 0, 0, 0, 3, 1, 1, 1, 2, 2, 2, 3, 3, 3, 4, 4];
-    const slen2_tab = [0, 1, 2, 3, 0, 1, 2, 3, 1, 2, 3, 1, 2, 3, 2, 3];
+    var slen1_n = [1, 1, 1, 1, 8, 2, 2, 2, 4, 4, 4, 8, 8, 8, 16, 16];
+    var slen2_n = [1, 2, 4, 8, 1, 2, 4, 8, 2, 4, 8, 2, 4, 8, 4, 8];
+    var slen1_tab = [0, 0, 0, 0, 3, 1, 1, 1, 2, 2, 2, 3, 3, 3, 4, 4];
+    var slen2_tab = [0, 1, 2, 3, 0, 1, 2, 3, 1, 2, 3, 1, 2, 3, 2, 3];
     Takehiro.slen1_tab = slen1_tab;
     Takehiro.slen2_tab = slen2_tab;
 
     function scfsi_calc(ch, l3_side) {
         var sfb;
-        const gi = l3_side.tt[1][ch];
-        const g0 = l3_side.tt[0][ch];
+        var gi = l3_side.tt[1][ch];
+        var g0 = l3_side.tt[0][ch];
 
         for (var i = 0; i < Tables.scfsi_band.length - 1; i++) {
             for (sfb = Tables.scfsi_band[i]; sfb < Tables.scfsi_band[i + 1]; sfb++) {
@@ -826,7 +844,7 @@ function Takehiro() {
 
         for (var i = 0; i < 16; i++) {
             if (s1 < slen1_n[i] && s2 < slen2_n[i]) {
-                const c = slen1_tab[i] * c1 + slen2_tab[i] * c2;
+                var c = slen1_tab[i] * c1 + slen2_tab[i] * c2;
                 if (gi.part2_length > c) {
                     gi.part2_length = c;
                     gi.scalefac_compress = i;
@@ -842,7 +860,7 @@ function Takehiro() {
      */
     this.best_scalefac_store = function (gfc, gr, ch, l3_side) {
         /* use scalefac_scale if we can */
-        const gi = l3_side.tt[gr][ch];
+        var gi = l3_side.tt[gr][ch];
         var sfb, i, j, l;
         var recalc = 0;
 
@@ -853,7 +871,7 @@ function Takehiro() {
         /* check if l3_enc=0 */
         j = 0;
         for (sfb = 0; sfb < gi.sfbmax; sfb++) {
-            const width = gi.width[sfb];
+            var width = gi.width[sfb];
             assert(width >= 0);
             j += width;
             for (l = -width; l < 0; l++) {
@@ -916,9 +934,9 @@ function Takehiro() {
         }
         if (recalc != 0) {
             if (gfc.mode_gr == 2) {
-                scale_bitcount(gi);
+                this.scale_bitcount(gi);
             } else {
-                scale_bitcount_lsf(gfc, gi);
+                this.scale_bitcount_lsf(gfc, gi);
             }
         }
     }
@@ -936,7 +954,7 @@ function Takehiro() {
      *
      * 18*slen1_tab[i] + 18*slen2_tab[i]
      */
-    const scale_short = [0, 18, 36, 54, 54, 36, 54, 72,
+    var scale_short = [0, 18, 36, 54, 54, 36, 54, 72,
         54, 72, 90, 72, 90, 108, 108, 126];
 
     /**
@@ -944,7 +962,7 @@ function Takehiro() {
      *
      * 17*slen1_tab[i] + 18*slen2_tab[i]
      */
-    const scale_mixed = [0, 18, 36, 54, 51, 35, 53, 71,
+    var scale_mixed = [0, 18, 36, 54, 51, 35, 53, 71,
         52, 70, 88, 69, 87, 105, 104, 122];
 
     /**
@@ -952,7 +970,7 @@ function Takehiro() {
      *
      * 11*slen1_tab[i] + 10*slen2_tab[i]
      */
-    const scale_long = [0, 10, 20, 30, 33, 21, 31, 41, 32, 42,
+    var scale_long = [0, 10, 20, 30, 33, 21, 31, 41, 32, 42,
         52, 43, 53, 63, 64, 74];
 
     /**
@@ -963,7 +981,7 @@ function Takehiro() {
 
         /* maximum values */
         var tab;
-        const scalefac = cod_info.scalefac;
+        var scalefac = cod_info.scalefac;
 
         assert(all_scalefactors_not_negative(scalefac, cod_info.sfbmax));
 
@@ -1013,7 +1031,7 @@ function Takehiro() {
     /**
      * table of largest scalefactor values for MPEG2
      */
-    const max_range_sfac_tab = [[15, 15, 7, 7],
+    var max_range_sfac_tab = [[15, 15, 7, 7],
         [15, 15, 7, 0], [7, 3, 0, 0], [15, 31, 31, 0],
         [7, 7, 7, 0], [3, 3, 0, 0]];
 
@@ -1029,8 +1047,8 @@ function Takehiro() {
         var over;
         var i, sfb;
         var max_sfac = new_int(4);
-//const partition_table;
-        const scalefac = cod_info.scalefac;
+//var partition_table;
+        var scalefac = cod_info.scalefac;
 
         /*
          * Set partition table. Note that should try to use table one, but do
@@ -1046,7 +1064,7 @@ function Takehiro() {
 
         if (cod_info.block_type == Encoder.SHORT_TYPE) {
             row_in_table = 1;
-            const partition_table = qupvt.nr_of_sfb_block[table_number][row_in_table];
+            var partition_table = qupvt.nr_of_sfb_block[table_number][row_in_table];
             for (sfb = 0, partition = 0; partition < 4; partition++) {
                 nr_sfb = partition_table[partition] / 3;
                 for (i = 0; i < nr_sfb; i++, sfb++)
@@ -1056,7 +1074,7 @@ function Takehiro() {
             }
         } else {
             row_in_table = 0;
-            const partition_table = qupvt.nr_of_sfb_block[table_number][row_in_table];
+            var partition_table = qupvt.nr_of_sfb_block[table_number][row_in_table];
             for (sfb = 0, partition = 0; partition < 4; partition++) {
                 nr_sfb = partition_table[partition];
                 for (i = 0; i < nr_sfb; i++, sfb++)
@@ -1116,7 +1134,7 @@ function Takehiro() {
      * Since no bands have been over-amplified, we can set scalefac_compress and
      * slen[] for the formatter
      */
-    const log2tab = [0, 1, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4,
+    var log2tab = [0, 1, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4,
         4, 4, 4, 4];
 
     this.huffman_init = function (gfc) {

@@ -1,3 +1,5 @@
+require('use-strict');
+
 assert = console.assert;
 fs = require('fs');
 Lame = require('./Lame.js');
@@ -8,6 +10,10 @@ Quantize = require('./Quantize.js');
 Takehiro = require('./Takehiro.js');
 Reservoir = require('./Reservoir.js');
 MPEGMode = require('./MPEGMode.js');
+BitStream = require('./BitStream.js');
+var Encoder = require('./Encoder.js');
+var Version = require('./Version.js');
+var VBRTag = require('./VBRTag.js');
 
 function GetAudio() {
     var parse;
@@ -19,21 +25,7 @@ function GetAudio() {
     }
 }
 
-function VBRTag() {
-    var lame;
-    var bs;
-    var v;
 
-    this.setModules = function(_lame, _bs, _v) {
-        lame = _lame;
-        bs = _bs;
-        v = _v;
-    }
-}
-
-function Version() {
-    console.log("TODO: Version");
-}
 
 function Parse() {
     var ver;

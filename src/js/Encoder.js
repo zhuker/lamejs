@@ -1,29 +1,18 @@
-/*
- *      LAME MP3 encoding engine
- *
- *      Copyright (c) 1999 Mark Taylor
- *      Copyright (c) 2000-2002 Takehiro Tominaga
- *      Copyright (c) 2000-2005 Robert Hegemann
- *      Copyright (c) 2001 Gabriel Bouvigne
- *      Copyright (c) 2001 John Dahlstrom
- *
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Lesser General Public
- * License as published by the Free Software Foundation; either
- * version 2 of the License, or (at your option) any later version.
- *
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Library General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the
- * Free Software Foundation, Inc., 59 Temple Place - Suite 330,
- * Boston, MA 02111-1307, USA.
- */
-NewMDCT = require('./NewMDCT.js');
-III_psy_ratio = require('./III_psy_ratio.js');
+var common = require('./common.js');
+var System = common.System;
+var VbrMode = common.VbrMode;
+var Float = common.Float;
+var ShortBlock = common.ShortBlock;
+var Util = common.Util;
+var Arrays = common.Arrays;
+var new_array_n = common.new_array_n;
+var new_byte = common.new_byte;
+var new_double = common.new_double;
+var new_float = common.new_float;
+var new_float_n = common.new_float_n;
+var new_int = common.new_int;
+var new_int_n = common.new_int_n;
+
 /**
  * ENCDELAY The encoder delay.
  *
@@ -116,8 +105,10 @@ Encoder.fircoef = [-0.0207887 * 5, -0.0378413 * 5,
     -0.0432472 * 5, -0.031183 * 5, 7.79609e-18 * 5, 0.0467745 * 5,
     0.10091 * 5, 0.151365 * 5, 0.187098 * 5];
 
-
 function Encoder() {
+    var NewMDCT = require('./NewMDCT.js');
+    var III_psy_ratio = require('./III_psy_ratio.js');
+
     var FFTOFFSET = Encoder.FFTOFFSET;
     var MPG_MD_MS_LR = Encoder.MPG_MD_MS_LR;
     //BitStream bs;
@@ -664,7 +655,7 @@ function Encoder() {
 
         return mp3count;
     }
-
 }
+
 
 module.exports = Encoder;

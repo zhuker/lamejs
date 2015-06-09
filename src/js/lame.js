@@ -1,11 +1,26 @@
-PsyModel = require('./PsyModel.js');
-LameGlobalFlags = require('./LameGlobalFlags.js');
-LameInternalFlags = require('./LameInternalFlags.js');
-ATH = require('./ATH.js');
-ReplayGain = require('./ReplayGain.js');
-CBRNewIterationLoop = require('./CBRNewIterationLoop.js');
-BitStream = require('./BitStream.js');
-Tables = require('./Tables.js');
+var common = require('./common.js');
+var System = common.System;
+var VbrMode = common.VbrMode;
+var Float = common.Float;
+var ShortBlock = common.ShortBlock;
+var Util = common.Util;
+var Arrays = common.Arrays;
+var new_array_n = common.new_array_n;
+var new_byte = common.new_byte;
+var new_double = common.new_double;
+var new_float = common.new_float;
+var new_float_n = common.new_float_n;
+var new_int = common.new_int;
+var new_int_n = common.new_int_n;
+var PsyModel = require('./PsyModel.js');
+var LameGlobalFlags = require('./LameGlobalFlags.js');
+var LameInternalFlags = require('./LameInternalFlags.js');
+var ATH = require('./ATH.js');
+var ReplayGain = require('./ReplayGain.js');
+var CBRNewIterationLoop = require('./CBRNewIterationLoop.js');
+var BitStream = require('./BitStream.js');
+var Tables = require('./Tables.js');
+var Encoder = require('./Encoder.js');
 
 function Lame() {
     var self = this;
@@ -539,7 +554,7 @@ function Lame() {
     }
 
     function lame_init_qval(gfp) {
-        const gfc = gfp.internal_flags;
+        var gfc = gfp.internal_flags;
 
         switch (gfp.quality) {
             default:
@@ -1363,7 +1378,7 @@ function Lame() {
     }
 
     this.lame_encode_buffer = function (gfp, buffer_l, buffer_r, nsamples, mp3buf, mp3bufPos, mp3buf_size) {
-        const gfc = gfp.internal_flags;
+        var gfc = gfp.internal_flags;
         var in_buffer = [null, null];
 
         if (gfc.Class_ID != LAME_ID)
@@ -1400,7 +1415,7 @@ function Lame() {
     }
 
     function lame_encode_buffer_sample(gfp, buffer_l, buffer_r, nsamples, mp3buf, mp3bufPos, mp3buf_size) {
-        const gfc = gfp.internal_flags;
+        var gfc = gfp.internal_flags;
         var mp3size = 0, ret, i, ch, mf_needed;
         var mp3out;
         var mfbuf = [null, null];
@@ -1465,7 +1480,7 @@ function Lame() {
 
         var in_bufferPos = 0;
         while (nsamples > 0) {
-            const in_buffer_ptr = [null, null];
+            var in_buffer_ptr = [null, null];
             var n_in = 0;
             /* number of input samples processed with fill_buffer */
             var n_out = 0;
@@ -1554,7 +1569,7 @@ function Lame() {
     }
 
     function fill_buffer(gfp, mfbuf, in_buffer, in_bufferPos, nsamples, io) {
-        const gfc = gfp.internal_flags;
+        var gfc = gfp.internal_flags;
 
         /* copy in new samples into mfbuf, with resampling if necessary */
         if ((gfc.resample_ratio < .9999) || (gfc.resample_ratio > 1.0001)) {

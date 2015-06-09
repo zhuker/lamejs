@@ -139,41 +139,55 @@
 //package mp3;
 
 //import java.util.Arrays;
-
-FFT = require("./FFT.js");
+var common = require('./common.js');
+var System = common.System;
+var VbrMode = common.VbrMode;
+var Float = common.Float;
+var ShortBlock = common.ShortBlock;
+var Util = common.Util;
+var Arrays = common.Arrays;
+var new_array_n = common.new_array_n;
+var new_byte = common.new_byte;
+var new_double = common.new_double;
+var new_float = common.new_float;
+var new_float_n = common.new_float_n;
+var new_int = common.new_int;
+var new_int_n = common.new_int_n;
+var FFT = require("./FFT.js");
+var Encoder = require("./Encoder.js");
 
 function PsyModel() {
 
     var fft = new FFT();
 
-    const LOG10 = 2.30258509299404568402;
+    var LOG10 = 2.30258509299404568402;
 
-    const rpelev = 2;
-    const rpelev2 = 16;
-    const rpelev_s = 2;
-    const rpelev2_s = 16;
+    var rpelev = 2;
+    var rpelev2 = 16;
+    var rpelev_s = 2;
+    var rpelev2_s = 16;
 
     /* size of each partition band, in barks: */
-    const DELBARK = .34;
+    var DELBARK = .34;
 
     /* tuned for output level (sensitive to energy scale) */
-    const VO_SCALE = (1. / (14752 * 14752) / (Encoder.BLKSIZE / 2));
+    var VO_SCALE = (1. / (14752 * 14752) / (Encoder.BLKSIZE / 2));
 
-    const temporalmask_sustain_sec = 0.01;
+    var temporalmask_sustain_sec = 0.01;
 
-    const NS_PREECHO_ATT0 = 0.8;
-    const NS_PREECHO_ATT1 = 0.6;
-    const NS_PREECHO_ATT2 = 0.3;
+    var NS_PREECHO_ATT0 = 0.8;
+    var NS_PREECHO_ATT1 = 0.6;
+    var NS_PREECHO_ATT2 = 0.3;
 
-    const NS_MSFIX = 3.5;
+    var NS_MSFIX = 3.5;
 
-    const NSATTACKTHRE = 4.4;
-    const NSATTACKTHRE_S = 25;
+    var NSATTACKTHRE = 4.4;
+    var NSATTACKTHRE_S = 25;
 
-    const NSFIRLEN = 21;
+    var NSFIRLEN = 21;
 
     /* size of each partition band, in barks: */
-    const LN_TO_LOG10 = 0.2302585093;
+    var LN_TO_LOG10 = 0.2302585093;
 
     function NON_LINEAR_SCALE_ENERGY(x) {
         return x;
@@ -233,7 +247,7 @@ function PsyModel() {
     }
 
     function compute_ffts(gfp, fftenergy, fftenergy_s, wsamp_l, wsamp_lPos, wsamp_s, wsamp_sPos, gr_out, chn, buffer, bufPos) {
-        const gfc = gfp.internal_flags;
+        var gfc = gfp.internal_flags;
         if (chn < 2) {
             fft.fft_long(gfc, wsamp_l[wsamp_lPos], chn, buffer, bufPos);
             fft.fft_short(gfc, wsamp_s[wsamp_sPos], chn, buffer, bufPos);
@@ -328,15 +342,15 @@ function PsyModel() {
     /**
      * as in if(i>8)
      */
-    const I1LIMIT = 8;
+    var I1LIMIT = 8;
     /**
      * as in if(i>24) . changed 23
      */
-    const I2LIMIT = 23;
+    var I2LIMIT = 23;
     /**
      * as in if(m<15)
      */
-    const MLIMIT = 15;
+    var MLIMIT = 15;
 
     var ma_max_i1;
     var ma_max_i2;
@@ -350,7 +364,7 @@ function PsyModel() {
      *
      * pow(10, -0.0..-0.6)
      */
-    const tab = [1.0, 0.79433, 0.63096, 0.63096,
+    var tab = [1.0, 0.79433, 0.63096, 0.63096,
         0.63096, 0.63096, 0.63096, 0.25119, 0.11749];
 
     function init_mask_add_max_values() {
@@ -359,7 +373,7 @@ function PsyModel() {
         ma_max_m = Math.pow(10, (MLIMIT) / 10.0);
     }
 
-    const table1 = [3.3246 * 3.3246,
+    var table1 = [3.3246 * 3.3246,
         3.23837 * 3.23837, 3.15437 * 3.15437, 3.00412 * 3.00412,
         2.86103 * 2.86103, 2.65407 * 2.65407, 2.46209 * 2.46209,
         2.284 * 2.284, 2.11879 * 2.11879, 1.96552 * 1.96552,
@@ -369,12 +383,12 @@ function PsyModel() {
         1.12765 * 1.12765, 1.09428 * 1.09428, 1.0659 * 1.0659,
         1.03826 * 1.03826, 1.01895 * 1.01895, 1];
 
-    const table2 = [1.33352 * 1.33352,
+    var table2 = [1.33352 * 1.33352,
         1.35879 * 1.35879, 1.38454 * 1.38454, 1.39497 * 1.39497,
         1.40548 * 1.40548, 1.3537 * 1.3537, 1.30382 * 1.30382,
         1.22321 * 1.22321, 1.14758 * 1.14758, 1];
 
-    const table3 = [2.35364 * 2.35364,
+    var table3 = [2.35364 * 2.35364,
         2.29259 * 2.29259, 2.23313 * 2.23313, 2.12675 * 2.12675,
         2.02545 * 2.02545, 1.87894 * 1.87894, 1.74303 * 1.74303,
         1.61695 * 1.61695, 1.49999 * 1.49999, 1.39148 * 1.39148,
@@ -456,7 +470,7 @@ function PsyModel() {
         return m1 * table1[i];
     }
 
-    const table2_ = [1.33352 * 1.33352,
+    var table2_ = [1.33352 * 1.33352,
         1.35879 * 1.35879, 1.38454 * 1.38454, 1.39497 * 1.39497,
         1.40548 * 1.40548, 1.3537 * 1.3537, 1.30382 * 1.30382,
         1.22321 * 1.22321, 1.14758 * 1.14758, 1];
@@ -507,7 +521,7 @@ function PsyModel() {
      * compute interchannel masking effects
      */
     function calc_interchannel_masking(gfp, ratio) {
-        const gfc = gfp.internal_flags;
+        var gfc = gfp.internal_flags;
         if (gfc.channels_out > 1) {
             for (var sb = 0; sb < Encoder.SBMAX_l; sb++) {
                 var l = gfc.thm[0].l[sb];
@@ -718,7 +732,7 @@ function PsyModel() {
     }
 
     function compute_masking_s(gfp, fftenergy_s, eb, thr, chn, sblock) {
-        const gfc = gfp.internal_flags;
+        var gfc = gfp.internal_flags;
         var j, b;
 
         for (b = j = 0; b < gfc.npart_s; ++b) {
@@ -769,7 +783,7 @@ function PsyModel() {
     }
 
     function block_type_set(gfp, uselongblock, blocktype_d, blocktype) {
-        const gfc = gfp.internal_flags;
+        var gfc = gfp.internal_flags;
 
         if (gfp.short_blocks == ShortBlock.short_block_coupled
                 /* force both channels to use the same block type */
@@ -831,7 +845,7 @@ function PsyModel() {
     /**
      * these values are tuned only for 44.1kHz...
      */
-    const regcoef_s = [11.8, 13.6, 17.2, 32, 46.5,
+    var regcoef_s = [11.8, 13.6, 17.2, 32, 46.5,
         51.3, 57.5, 67.1, 71.5, 84.6, 97.6, 130,
         /* 255.8 */
     ];
@@ -863,7 +877,7 @@ function PsyModel() {
     /**
      * these values are tuned only for 44.1kHz...
      */
-    const regcoef_l = [6.8, 5.8, 5.8, 6.4, 6.5, 9.9,
+    var regcoef_l = [6.8, 5.8, 5.8, 6.4, 6.5, 9.9,
         12.1, 14.4, 15, 18.9, 21.6, 26.9, 34.2, 40.2, 46.8, 56.5,
         60.7, 73.9, 85.7, 93.4, 126.1,
         /* 241.3 */
@@ -979,7 +993,7 @@ function PsyModel() {
         assert(b == (gfc.npart_l - 1));
     }
 
-    const fircoef = [
+    var fircoef = [
         -8.65163e-18 * 2, -0.00851586 * 2, -6.74764e-18 * 2, 0.0209036 * 2,
         -3.36639e-17 * 2, -0.0438162 * 2, -1.54175e-17 * 2, 0.0931738 * 2,
         -5.52212e-17 * 2, -0.313819 * 2
@@ -990,7 +1004,7 @@ function PsyModel() {
          * to get a good cache performance, one has to think about the sequence,
          * in which the variables are used.
          */
-        const gfc = gfp.internal_flags;
+        var gfc = gfp.internal_flags;
 
         /* fft and energy calculation */
         var wsamp_L = new_float_n([2, Encoder.BLKSIZE]);
@@ -1038,7 +1052,7 @@ function PsyModel() {
         /* unroll the loop 2 times */
         for (chn = 0; chn < gfc.channels_out; chn++) {
             /* apply high pass filter of fs/4 */
-            firbuf = buffer[chn];
+            var firbuf = buffer[chn];
             var firbufPos = bufPos + 576 - 350 - NSFIRLEN + 192;
             assert(fircoef.length == ((NSFIRLEN - 1) / 2));
             for (i = 0; i < 576; i++) {
@@ -1371,7 +1385,7 @@ function PsyModel() {
     }
 
     function vbrpsy_compute_fft_l(gfp, buffer, bufPos, chn, gr_out, fftenergy, wsamp_l, wsamp_lPos) {
-        const gfc = gfp.internal_flags;
+        var gfc = gfp.internal_flags;
         if (chn < 2) {
             fft.fft_long(gfc, wsamp_l[wsamp_lPos], chn, buffer, bufPos);
         } else if (chn == 2) {
@@ -1415,7 +1429,7 @@ function PsyModel() {
     }
 
     function vbrpsy_compute_fft_s(gfp, buffer, bufPos, chn, sblock, fftenergy_s, wsamp_s, wsamp_sPos) {
-        const gfc = gfp.internal_flags;
+        var gfc = gfp.internal_flags;
 
         if (sblock == 0 && chn < 2) {
             fft.fft_short(gfc, wsamp_s[wsamp_sPos], chn, buffer, bufPos);
@@ -1447,7 +1461,7 @@ function PsyModel() {
      * compute loudness approximation (used for ATH auto-level adjustment)
      */
     function vbrpsy_compute_loudness_approximation_l(gfp, gr_out, chn, fftenergy) {
-        const gfc = gfp.internal_flags;
+        var gfc = gfp.internal_flags;
         if (gfp.athaa_loudapprox == 2 && chn < 2) {
             // no loudness for mid/side ch
             gfc.loudness_sq[gr_out][chn] = gfc.loudness_sq_save[chn];
@@ -1455,7 +1469,7 @@ function PsyModel() {
         }
     }
 
-    const fircoef_ = [-8.65163e-18 * 2,
+    var fircoef_ = [-8.65163e-18 * 2,
         -0.00851586 * 2, -6.74764e-18 * 2, 0.0209036 * 2,
         -3.36639e-17 * 2, -0.0438162 * 2, -1.54175e-17 * 2,
         0.0931738 * 2, -5.52212e-17 * 2, -0.313819 * 2];
@@ -1466,7 +1480,7 @@ function PsyModel() {
      */
     function vbrpsy_attack_detection(gfp, buffer, bufPos, gr_out, masking_ratio, masking_MS_ratio, energy, sub_short_factor, ns_attacks, uselongblock) {
         var ns_hpfsmpl = new_float_n([2, 576]);
-        const gfc = gfp.internal_flags;
+        var gfc = gfp.internal_flags;
         var n_chn_out = gfc.channels_out;
         /* chn=2 and 3 = Mid and Side channels */
         var n_chn_psy = (gfp.mode == MPEGMode.JOINT_STEREO) ? 4 : n_chn_out;
@@ -1506,14 +1520,14 @@ function PsyModel() {
             var en_short = [0, 0, 0, 0];
             var pf = ns_hpfsmpl[chn & 1];
             var pfPos = 0;
-            const attackThreshold = (chn == 3) ? gfc.nsPsy.attackthre_s
+            var attackThreshold = (chn == 3) ? gfc.nsPsy.attackthre_s
                 : gfc.nsPsy.attackthre;
             var ns_uselongblock = 1;
 
             if (chn == 2) {
                 for (var i = 0, j = 576; j > 0; ++i, --j) {
-                    const l = ns_hpfsmpl[0][i];
-                    const r = ns_hpfsmpl[1][i];
+                    var l = ns_hpfsmpl[0][i];
+                    var r = ns_hpfsmpl[1][i];
                     ns_hpfsmpl[0][i] = l + r;
                     ns_hpfsmpl[1][i] = l - r;
                 }
@@ -1531,7 +1545,7 @@ function PsyModel() {
             }
 
             for (var i = 0; i < 9; i++) {
-                const pfe = pfPos + 576 / 9;
+                var pfe = pfPos + 576 / 9;
                 var p = 1.;
                 for (; pfPos < pfe; pfPos++)
                     if (p < Math.abs(pf[pfPos]))
@@ -1552,7 +1566,7 @@ function PsyModel() {
             }
             /* pulse like signal detection for fatboy.wav and so on */
             for (var i = 0; i < 3; ++i) {
-                const enn = en_subshort[i * 3 + 3]
+                var enn = en_subshort[i * 3 + 3]
                     + en_subshort[i * 3 + 4] + en_subshort[i * 3 + 5];
                 var factor = 1.;
                 if (en_subshort[i * 3 + 5] * 6 < enn) {
@@ -1597,9 +1611,9 @@ function PsyModel() {
              * FSOL and SNAPS
              */
             for (var i = 1; i < 4; i++) {
-                const u = en_short[i - 1];
-                const v = en_short[i];
-                const m = Math.max(u, v);
+                var u = en_short[i - 1];
+                var v = en_short[i];
+                var m = Math.max(u, v);
                 if (m < 40000) { /* (2) */
                     if (u < 1.7 * v && v < 1.7 * u) { /* (1) */
                         if (i == 1 && ns_attacks[chn][0] <= ns_attacks[chn][i]) {
@@ -1728,7 +1742,7 @@ function PsyModel() {
     }
 
     function vbrpsy_compute_masking_s(gfp, fftenergy_s, eb, thr, chn, sblock) {
-        const gfc = gfp.internal_flags;
+        var gfc = gfp.internal_flags;
         var max = new float[Encoder.CBANDS], avg = new_float(Encoder.CBANDS);
         var i, j, b;
         var mask_idx_s = new int[Encoder.CBANDS];
@@ -1935,7 +1949,7 @@ function PsyModel() {
     }
 
     function vbrpsy_compute_block_type(gfp, uselongblock) {
-        const gfc = gfp.internal_flags;
+        var gfc = gfp.internal_flags;
 
         if (gfp.short_blocks == ShortBlock.short_block_coupled
                 /* force both channels to use the same block type */
@@ -1956,7 +1970,7 @@ function PsyModel() {
     }
 
     function vbrpsy_apply_block_type(gfp, uselongblock, blocktype_d) {
-        const gfc = gfp.internal_flags;
+        var gfc = gfp.internal_flags;
 
         /*
          * update the blocktype of the previous granule, since it depends on
@@ -2045,7 +2059,7 @@ function PsyModel() {
     }
 
     this.L3psycho_anal_vbr = function (gfp, buffer, bufPos, gr_out, masking_ratio, masking_MS_ratio, percep_entropy, percep_MS_entropy, energy, blocktype_d) {
-        const gfc = gfp.internal_flags;
+        var gfc = gfp.internal_flags;
 
         /* fft and energy calculation */
         var wsamp_l;
@@ -2285,7 +2299,7 @@ function PsyModel() {
         }
         {
             var sum = 0;
-            const m = 1000;
+            var m = 1000;
             var i;
             for (i = 0; i <= m; ++i) {
                 var x = lim_a + i * (lim_b - lim_a) / m;
@@ -2430,7 +2444,7 @@ function PsyModel() {
         /* compute bark values of each critical band */
         j = 0;
         for (var k = 0; k < ni; k++) {
-            const w = numlines[k];
+            var w = numlines[k];
             var bark1, bark2;
 
             bark1 = freq2bark(sfreq * (j));
@@ -2524,7 +2538,7 @@ function PsyModel() {
      * does not use this feature. (Robert 071216)
      */
     this.psymodel_init = function (gfp) {
-        const gfc = gfp.internal_flags;
+        var gfc = gfp.internal_flags;
         var i;
         var useOldS3 = true;
         var bvl_a = 13, bvl_b = 24;
@@ -2533,7 +2547,7 @@ function PsyModel() {
         var bval = new_float(Encoder.CBANDS);
         var bval_width = new_float(Encoder.CBANDS);
         var norm = new_float(Encoder.CBANDS);
-        const sfreq = gfp.out_samplerate;
+        var sfreq = gfp.out_samplerate;
 
         switch (gfp.experimentalZ) {
             default:
@@ -2759,7 +2773,7 @@ function PsyModel() {
         if (gfp.ATHtype != -1) {
             /* compute equal loudness weights (eql_w) */
             var freq;
-            const freq_inc = gfp.out_samplerate
+            var freq_inc = gfp.out_samplerate
                 / (Encoder.BLKSIZE);
             var eql_balance = 0.0;
             freq = 0.0;

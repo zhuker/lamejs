@@ -1,23 +1,26 @@
-IIISideInfo = require('./IIISideInfo.js');
-common = require('./common.js');
-System = common.System;
-VbrMode = common.VbrMode;
-Float = common.Float;
-ShortBlock = common.ShortBlock;
-Util = common.Util;
-Arrays = common.Arrays;
-new_array_n = common.new_array_n;
-new_byte = common.new_byte;
-new_double = common.new_double;
-new_float = common.new_float;
-new_float_n = common.new_float_n;
-new_int = common.new_int;
-new_int_n = common.new_int_n;
+var common = require('./common.js');
+var System = common.System;
+var VbrMode = common.VbrMode;
+var Float = common.Float;
+var ShortBlock = common.ShortBlock;
+var Util = common.Util;
+var Arrays = common.Arrays;
+var new_array_n = common.new_array_n;
+var new_byte = common.new_byte;
+var new_double = common.new_double;
+var new_float = common.new_float;
+var new_float_n = common.new_float_n;
+var new_int = common.new_int;
+var new_int_n = common.new_int_n;
 
-ScaleFac = require('./ScaleFac.js');
-NsPsy = require('./NsPsy.js');
-VBRSeekInfo = require('./VBRSeekInfo.js');
-III_psy_xmin = require('./III_psy_xmin.js');
+var IIISideInfo = require('./IIISideInfo.js');
+var ScaleFac = require('./ScaleFac.js');
+var NsPsy = require('./NsPsy.js');
+var VBRSeekInfo = require('./VBRSeekInfo.js');
+var III_psy_xmin = require('./III_psy_xmin.js');
+var Encoder = require('./Encoder.js');
+var L3Side = require('./L3Side.js');
+
 
 LameInternalFlags.MFSIZE = (3 * 1152 + Encoder.ENCDELAY - Encoder.MDCTDELAY);
 LameInternalFlags.MAX_HEADER_BUF = 256;

@@ -28,10 +28,27 @@
 //package mp3;
 
 //import java.util.Arrays;
+var common = require('./common.js');
+var System = common.System;
+var VbrMode = common.VbrMode;
+var Float = common.Float;
+var ShortBlock = common.ShortBlock;
+var Util = common.Util;
+var Arrays = common.Arrays;
+var new_array_n = common.new_array_n;
+var new_byte = common.new_byte;
+var new_double = common.new_double;
+var new_float = common.new_float;
+var new_float_n = common.new_float_n;
+var new_int = common.new_int;
+var new_int_n = common.new_int_n;
+
+var Encoder = require('./Encoder.js');
+
 
 function NewMDCT() {
 
-	const enwindow = [
+	var enwindow = [
 			-4.77e-07 * 0.740951125354959 / 2.384e-06,
 			1.03951e-04 * 0.740951125354959 / 2.384e-06,
 			9.53674e-04 * 0.740951125354959 / 2.384e-06,
@@ -318,10 +335,10 @@ function NewMDCT() {
 			-6.9618e-05 / 2.384e-06, /* 2.384e-06/2.384e-06 */
 	];
 
-	const NS = 12;
-	const NL = 36;
+	var NS = 12;
+	var NL = 36;
 
-	const win = [
+	var win = [
 	    [
 	     2.382191739347913e-13,
 	     6.423305872147834e-13,
@@ -489,10 +506,10 @@ function NewMDCT() {
 	     ]
 	];
 
-	const tantab_l = win[Encoder.SHORT_TYPE];
-	const cx = win[Encoder.SHORT_TYPE];
-	const ca = win[Encoder.SHORT_TYPE];
-	const cs = win[Encoder.SHORT_TYPE];
+	var tantab_l = win[Encoder.SHORT_TYPE];
+	var cx = win[Encoder.SHORT_TYPE];
+	var ca = win[Encoder.SHORT_TYPE];
+	var cs = win[Encoder.SHORT_TYPE];
 
 	/**
 	 * new IDCT routine written by Takehiro TOMINAGA
@@ -505,7 +522,7 @@ function NewMDCT() {
 	 * buffer #x# is then windowed by the analysis window #c# to produce the
 	 * windowed sample #z#
 	 */
-	const order = [
+	var order = [
 	    0, 1, 16, 17, 8, 9, 24, 25, 4, 5, 20, 21, 12, 13, 28, 29,
 	    2, 3, 18, 19, 10, 11, 26, 27, 6, 7, 22, 23, 14, 15, 30, 31
 	];

@@ -7,20 +7,21 @@
  *
  */
 
-common = require('./common.js');
-System = common.System;
-VbrMode = common.VbrMode;
-Float = common.Float;
-ShortBlock = common.ShortBlock;
-Util = common.Util;
-Arrays = common.Arrays;
-new_array_n = common.new_array_n;
-new_byte = common.new_byte;
-new_double = common.new_double;
-new_float = common.new_float;
-new_float_n = common.new_float_n;
-new_int = common.new_int;
-new_int_n = common.new_int_n;
+var common = require('./common.js');
+var System = common.System;
+var VbrMode = common.VbrMode;
+var Float = common.Float;
+var ShortBlock = common.ShortBlock;
+var Util = common.Util;
+var Arrays = common.Arrays;
+var new_array_n = common.new_array_n;
+var new_byte = common.new_byte;
+var new_double = common.new_double;
+var new_float = common.new_float;
+var new_float_n = common.new_float_n;
+var new_int = common.new_int;
+var new_int_n = common.new_int_n;
+var Encoder = require('./Encoder.js');
 
 function ScaleFac(arrL, arrS, arr21, arr12) {
 

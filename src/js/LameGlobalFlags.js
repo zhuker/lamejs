@@ -1,4 +1,4 @@
-MPEGMode = require('./MPEGMode.js');
+var MPEGMode = require('./MPEGMode.js');
 
 function LameGlobalFlags() {
 

@@ -58,7 +58,7 @@ function new_byte(count) {
     return new_int(count);
 }
 
-Arrays = {};
+var Arrays = {};
 
 Arrays.fill = function (a, fromIndex, toIndex, val) {
     for (var i = fromIndex; i < toIndex; i++) {
@@ -66,7 +66,7 @@ Arrays.fill = function (a, fromIndex, toIndex, val) {
     }
 };
 
-System = {};
+var System = {};
 
 System.arraycopy = function (src, srcPos, dest, destPos, length) {
     var srcEnd = srcPos + length;
@@ -75,7 +75,7 @@ System.arraycopy = function (src, srcPos, dest, destPos, length) {
 };
 
 
-Util = {};
+var Util = {};
 Util.SQRT2 = 1.41421356237309504880;
 Util.FAST_LOG10 = function (x) {
     return Math.log10(x);
@@ -105,7 +105,7 @@ ShortBlock.short_block_dispensed = new ShortBlock(2);
  */
 ShortBlock.short_block_forced = new ShortBlock(3);
 
-Float = {};
+var Float = {};
 Float.MAX_VALUE = 3.4028235e+38;
 
 function VbrMode(ordinal) {

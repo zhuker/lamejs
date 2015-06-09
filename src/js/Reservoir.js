@@ -72,9 +72,9 @@ function Reservoir() {
 	}
 
 	this.ResvFrameBegin = function(gfp, mean_bits) {
-		const gfc = gfp.internal_flags;
+		var gfc = gfp.internal_flags;
 		var maxmp3buf;
-		const l3_side = gfc.l3_side;
+		var l3_side = gfc.l3_side;
 
 		var frameLength = bs.getframebits(gfp);
 		mean_bits.bits = (frameLength - gfc.sideinfo_len * 8) / gfc.mode_gr;
@@ -185,7 +185,7 @@ function Reservoir() {
 	 * Mark Taylor 4/99
 	 */
 	this.ResvMaxBits = function(gfp, mean_bits, targ_bits, cbr) {
-		const gfc = gfp.internal_flags;
+		var gfc = gfp.internal_flags;
 		var add_bits;
         var ResvSize = gfc.ResvSize, ResvMax = gfc.ResvMax;
 
@@ -239,7 +239,7 @@ function Reservoir() {
 	 */
 	this.ResvFrameEnd = function(gfc, mean_bits) {
 		var over_bits;
-		const l3_side = gfc.l3_side;
+		var l3_side = gfc.l3_side;
 
 		gfc.ResvSize += mean_bits * gfc.mode_gr;
 		var stuffingBits = 0;

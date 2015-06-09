@@ -1,4 +1,21 @@
-MeanBits = require('./MeanBits.js');
+var common = require('./common.js');
+var System = common.System;
+var VbrMode = common.VbrMode;
+var Float = common.Float;
+var ShortBlock = common.ShortBlock;
+var Util = common.Util;
+var Arrays = common.Arrays;
+var new_array_n = common.new_array_n;
+var new_byte = common.new_byte;
+var new_double = common.new_double;
+var new_float = common.new_float;
+var new_float_n = common.new_float_n;
+var new_int = common.new_int;
+var new_int_n = common.new_int_n;
+var MeanBits = require('./MeanBits.js');
+var L3Side = require('./L3Side.js');
+var Encoder = require('./Encoder.js');
+var LameInternalFlags = require('./LameInternalFlags.js');
 
 function CBRNewIterationLoop(_quantize)  {
     var quantize = _quantize;

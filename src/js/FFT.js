@@ -1,25 +1,25 @@
-common = require('./common.js');
-System = common.System;
-VbrMode = common.VbrMode;
-Float = common.Float;
-ShortBlock = common.ShortBlock;
-Util = common.Util;
-Arrays = common.Arrays;
-new_array_n = common.new_array_n;
-new_byte = common.new_byte;
-new_double = common.new_double;
-new_float = common.new_float;
-new_float_n = common.new_float_n;
-new_int = common.new_int;
-new_int_n = common.new_int_n;
-Encoder = require('./Encoder.js');
+var common = require('./common.js');
+var System = common.System;
+var VbrMode = common.VbrMode;
+var Float = common.Float;
+var ShortBlock = common.ShortBlock;
+var Util = common.Util;
+var Arrays = common.Arrays;
+var new_array_n = common.new_array_n;
+var new_byte = common.new_byte;
+var new_double = common.new_double;
+var new_float = common.new_float;
+var new_float_n = common.new_float_n;
+var new_int = common.new_int;
+var new_int_n = common.new_int_n;
+var Encoder = require('./Encoder.js');
 
 function FFT() {
 
-    const window = new_float(Encoder.BLKSIZE);
-    const window_s = new_float(Encoder.BLKSIZE_s / 2);
+    var window = new_float(Encoder.BLKSIZE);
+    var window_s = new_float(Encoder.BLKSIZE_s / 2);
 
-    const costab = [
+    var costab = [
         9.238795325112867e-01, 3.826834323650898e-01,
         9.951847266721969e-01, 9.801714032956060e-02,
         9.996988186962042e-01, 2.454122852291229e-02,
@@ -34,7 +34,7 @@ function FFT() {
 
         n <<= 1;
         /* to get BLKSIZE, because of 3DNow! ASM routine */
-        const fn = fzPos + n;
+        var fn = fzPos + n;
         k4 = 4;
         do {
             var s1, c1;
@@ -112,7 +112,7 @@ function FFT() {
         } while (k4 < n);
     }
 
-    const rv_tbl = [0x00, 0x80, 0x40,
+    var rv_tbl = [0x00, 0x80, 0x40,
         0xc0, 0x20, 0xa0, 0x60, 0xe0, 0x10,
         0x90, 0x50, 0xd0, 0x30, 0xb0, 0x70,
         0xf0, 0x08, 0x88, 0x48, 0xc8, 0x28,
@@ -138,7 +138,7 @@ function FFT() {
     this.fft_short = function (gfc, x_real, chn, buffer, bufPos) {
         for (var b = 0; b < 3; b++) {
             var x = Encoder.BLKSIZE_s / 2;
-            const k = 0xffff & ((576 / 3) * (b + 1));
+            var k = 0xffff & ((576 / 3) * (b + 1));
             var j = Encoder.BLKSIZE_s / 8 - 1;
             do {
                 var f0, f1, f2, f3, w;

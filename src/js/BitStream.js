@@ -1,28 +1,21 @@
-/*
- *      MP3 bitstream Output interface for LAME
- *
- *      Copyright (c) 1999-2000 Mark Taylor
- *      Copyright (c) 1999-2002 Takehiro Tominaga
- *
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Lesser General Public
- * License as published by the Free Software Foundation; either
- * version 2 of the License, or (at your option) any later version.
- *
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Library General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the
- * Free Software Foundation, Inc., 59 Temple Place - Suite 330,
- * Boston, MA 02111-1307, USA.
- *
- * $Id: BitStream.java,v 1.23 2011/05/24 22:02:42 kenchis Exp $
- */
-//package mp3;
-Takehiro = require('./Takehiro.js');
+var common = require('./common.js');
+var System = common.System;
+var VbrMode = common.VbrMode;
+var Float = common.Float;
+var ShortBlock = common.ShortBlock;
+var Util = common.Util;
+var Arrays = common.Arrays;
+var new_array_n = common.new_array_n;
+var new_byte = common.new_byte;
+var new_double = common.new_double;
+var new_float = common.new_float;
+var new_float_n = common.new_float_n;
+var new_int = common.new_int;
+var new_int_n = common.new_int_n;
+var Takehiro = require('./Takehiro.js');
+var Tables = require('./Tables.js');
+var Encoder = require('./Encoder.js');
+var LameInternalFlags = require('./LameInternalFlags.js');
 
 BitStream.EQ = function (a, b) {
     return (Math.abs(a) > Math.abs(b)) ? (Math.abs((a) - (b)) <= (Math
@@ -179,6 +172,7 @@ function BitStream() {
     function drain_into_ancillary(gfp, remainingBits) {
         var gfc = gfp.internal_flags;
         var i;
+        console.log('remainingBits', remainingBits);
         assert(remainingBits >= 0);
 
         if (remainingBits >= 8) {
@@ -201,7 +195,7 @@ function BitStream() {
         if (remainingBits >= 32) {
             var version = ver.getLameShortVersion();
             if (remainingBits >= 32)
-                for (i = 0; i < version.length() && remainingBits >= 8; ++i) {
+                for (i = 0; i < version.length && remainingBits >= 8; ++i) {
                     remainingBits -= 8;
                     putbits2(gfc, version.charAt(i), 8);
                 }

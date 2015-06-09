@@ -1,5 +1,18 @@
-//package mp3;
-GrInfo = require('./GrInfo.js');
+var common = require('./common.js');
+var System = common.System;
+var VbrMode = common.VbrMode;
+var Float = common.Float;
+var ShortBlock = common.ShortBlock;
+var Util = common.Util;
+var Arrays = common.Arrays;
+var new_array_n = common.new_array_n;
+var new_byte = common.new_byte;
+var new_double = common.new_double;
+var new_float = common.new_float;
+var new_float_n = common.new_float_n;
+var new_int = common.new_int;
+var new_int_n = common.new_int_n;
+var GrInfo = require('./GrInfo.js');
 
 function IIISideInfo() {
     this.tt = [[null, null], [null, null]];

@@ -27,9 +27,27 @@
 //package mp3;
 
 //import java.util.Arrays;
-VBRQuantize = require('./VBRQuantize.js');
-CalcNoiseResult = require('./CalcNoiseResult.js');
-CalcNoiseData = require('./CalcNoiseData.js');
+var common = require('./common.js');
+var System = common.System;
+var VbrMode = common.VbrMode;
+var Float = common.Float;
+var ShortBlock = common.ShortBlock;
+var Util = common.Util;
+var Arrays = common.Arrays;
+var new_array_n = common.new_array_n;
+var new_byte = common.new_byte;
+var new_double = common.new_double;
+var new_float = common.new_float;
+var new_float_n = common.new_float_n;
+var new_int = common.new_int;
+var new_int_n = common.new_int_n;
+
+var VBRQuantize = require('./VBRQuantize.js');
+var CalcNoiseResult = require('./CalcNoiseResult.js');
+var CalcNoiseData = require('./CalcNoiseData.js');
+var Encoder = require('./Encoder.js');
+var GrInfo = require('./GrInfo.js');
+var L3Side = require('./L3Side.js');
 
 function Quantize() {
     var bs;
@@ -249,8 +267,8 @@ function Quantize() {
             var ix = gfc.scalefac_band.l[cod_info.sfb_lmax];
             System.arraycopy(cod_info.xr, 0, ixwork, 0, 576);
             for (var sfb = cod_info.sfb_smin; sfb < Encoder.SBMAX_s; sfb++) {
-                const start = gfc.scalefac_band.s[sfb];
-                const end = gfc.scalefac_band.s[sfb + 1];
+                var start = gfc.scalefac_band.s[sfb];
+                var end = gfc.scalefac_band.s[sfb + 1];
                 for (var window = 0; window < 3; window++) {
                     for (var l = start; l < end; l++) {
                         cod_info.xr[ix++] = ixwork[3 * l + window];
@@ -304,7 +322,7 @@ function Quantize() {
         var nBits;
         var CurrentStep = gfc.CurrentStep[ch];
         var flagGoneOver = false;
-        const start = gfc.OldValue[ch];
+        var start = gfc.OldValue[ch];
         var Direction = BinSearchDirection.BINSEARCH_NONE;
         cod_info.global_gain = start;
         desired_rate -= cod_info.part2_length;
@@ -576,7 +594,7 @@ function Quantize() {
      * </PRE>
      */
     function amp_scalefac_bands(gfp, cod_info, distort, xrpow, bRefine) {
-        const gfc = gfp.internal_flags;
+        var gfc = gfp.internal_flags;
         var ifqstep34;
 
         if (cod_info.scalefac_scale == 0) {
@@ -626,7 +644,7 @@ function Quantize() {
 
         var j = 0;
         for (var sfb = 0; sfb < cod_info.sfbmax; sfb++) {
-            const width = cod_info.width[sfb];
+            var width = cod_info.width[sfb];
             var l;
             j += width;
             if (distort[sfb] < trigger)
@@ -655,11 +673,11 @@ function Quantize() {
      * turns on scalefac scale and adjusts scalefactors
      */
     function inc_scalefac_scale(cod_info, xrpow) {
-        const ifqstep34 = 1.29683955465100964055;
+        var ifqstep34 = 1.29683955465100964055;
 
         var j = 0;
         for (var sfb = 0; sfb < cod_info.sfbmax; sfb++) {
-            const width = cod_info.width[sfb];
+            var width = cod_info.width[sfb];
             var s = cod_info.scalefac[sfb];
             if (cod_info.preflag != 0)
                 s += qupvt.pretab[sfb];
@@ -685,7 +703,7 @@ function Quantize() {
      */
     function inc_subblock_gain(gfc, cod_info, xrpow) {
         var sfb;
-        const scalefac = cod_info.scalefac;
+        var scalefac = cod_info.scalefac;
 
         /* subbloc_gain can't do anything in the long block region */
         for (sfb = 0; sfb < cod_info.sfb_lmax; sfb++) {
@@ -721,7 +739,7 @@ function Quantize() {
             var j = gfc.scalefac_band.l[cod_info.sfb_lmax];
             for (sfb = cod_info.sfb_lmax + window; sfb < cod_info.sfbmax; sfb += 3) {
                 var amp;
-                const width = cod_info.width[sfb];
+                var width = cod_info.width[sfb];
                 var s = scalefac[sfb];
                 assert(s >= 0);
                 s = s - (4 >> cod_info.scalefac_scale);
@@ -733,7 +751,7 @@ function Quantize() {
 
                 scalefac[sfb] = 0;
                 {
-                    const gain = 210 + (s << (cod_info.scalefac_scale + 1));
+                    var gain = 210 + (s << (cod_info.scalefac_scale + 1));
                     amp = qupvt.IPOW20(gain);
                 }
                 j += width * (window + 1);
@@ -746,7 +764,7 @@ function Quantize() {
             }
 
             {
-                const amp = qupvt.IPOW20(202);
+                var amp = qupvt.IPOW20(202);
                 j += cod_info.width[sfb] * (window + 1);
                 for (var l = -cod_info.width[sfb]; l < 0; l++) {
                     xrpow[j + l] *= amp;
@@ -772,7 +790,7 @@ function Quantize() {
      * </PRE>
      */
     function balance_noise(gfp, cod_info, distort, xrpow, bRefine) {
-        const gfc = gfp.internal_flags;
+        var gfc = gfp.internal_flags;
 
         amp_scalefac_bands(gfp, cod_info, distort, xrpow, bRefine);
 
@@ -850,7 +868,7 @@ function Quantize() {
      *            maximum allowed bits
      */
     this.outer_loop = function (gfp, cod_info, l3_xmin, xrpow, ch, targ_bits) {
-        const gfc = gfp.internal_flags;
+        var gfc = gfp.internal_flags;
         var cod_info_w = new GrInfo();
         var save_xrpow = new_float(576);
         var distort = new_float(L3Side.SFBMAX);
@@ -1038,8 +1056,8 @@ function Quantize() {
      * update reservoir status after FINAL quantization/bitrate
      */
     this.iteration_finish_one = function (gfc, gr, ch) {
-        const l3_side = gfc.l3_side;
-        const cod_info = l3_side.tt[gr][ch];
+        var l3_side = gfc.l3_side;
+        var cod_info = l3_side.tt[gr][ch];
 
         /*
          * try some better scalefac storage
@@ -1068,14 +1086,14 @@ function Quantize() {
      *            coloured magnitudes of spectral values
      */
     this.VBR_encode_granule = function (gfp, cod_info, l3_xmin, xrpow, ch, min_bits, max_bits) {
-        const gfc = gfp.internal_flags;
+        var gfc = gfp.internal_flags;
         var bst_cod_info = new GrInfo();
         var bst_xrpow = new_float(576);
-        const Max_bits = max_bits;
+        var Max_bits = max_bits;
         var real_bits = max_bits + 1;
         var this_bits = (max_bits + min_bits) / 2;
         var dbits, over, found = 0;
-        const sfb21_extra = gfc.sfb21_extra;
+        var sfb21_extra = gfc.sfb21_extra;
 
         assert(Max_bits <= LameInternalFlags.MAX_BITS_PER_CHANNEL);
         Arrays.fill(bst_cod_info.l3_enc, 0);
@@ -1159,7 +1177,7 @@ function Quantize() {
      * bitrate would provide
      */
     this.get_framebits = function (gfp, frameBits) {
-        const gfc = gfp.internal_flags;
+        var gfc = gfp.internal_flags;
 
         /*
          * always use at least this many bits per granule per channel unless we
@@ -1204,7 +1222,7 @@ function Quantize() {
      */
     this.VBR_old_prepare = function (gfp, pe, ms_ener_ratio, ratio, l3_xmin, frameBits, min_bits,
                                      max_bits, bands) {
-        const gfc = gfp.internal_flags;
+        var gfc = gfp.internal_flags;
 
         var masking_lower_db, adjust = 0.0;
         var analog_silence = 1;
@@ -1268,7 +1286,7 @@ function Quantize() {
     this.bitpressure_strategy = function (gfc, l3_xmin, min_bits, max_bits) {
         for (var gr = 0; gr < gfc.mode_gr; gr++) {
             for (var ch = 0; ch < gfc.channels_out; ch++) {
-                const gi = gfc.l3_side.tt[gr][ch];
+                var gi = gfc.l3_side.tt[gr][ch];
                 var pxmin = l3_xmin[gr][ch];
                 var pxminPos = 0;
                 for (var sfb = 0; sfb < gi.psy_lmax; sfb++)
@@ -1292,7 +1310,7 @@ function Quantize() {
     };
 
     this.VBR_new_prepare = function (gfp, pe, ratio, l3_xmin, frameBits, max_bits) {
-        const gfc = gfp.internal_flags;
+        var gfc = gfp.internal_flags;
 
         var analog_silence = 1;
         var avg = 0, bits = 0;
@@ -1321,7 +1339,7 @@ function Quantize() {
                 ms_convert(gfc.l3_side, gr);
             }
             for (var ch = 0; ch < gfc.channels_out; ++ch) {
-                const cod_info = gfc.l3_side.tt[gr][ch];
+                var cod_info = gfc.l3_side.tt[gr][ch];
 
                 gfc.masking_lower = Math.pow(10.0,
                     gfc.PSY.mask_adjust * 0.1);
@@ -1355,8 +1373,8 @@ function Quantize() {
      * mt 2000/05/31
      */
     this.calc_target_bits = function (gfp, pe, ms_ener_ratio, targ_bits, analog_silence_bits, max_frame_bits) {
-        const gfc = gfp.internal_flags;
-        const l3_side = gfc.l3_side;
+        var gfc = gfp.internal_flags;
+        var l3_side = gfc.l3_side;
         var res_factor;
         var gr, ch, totbits, mean_bits = 0;
 
@@ -1411,7 +1429,7 @@ function Quantize() {
                 if (pe[gr][ch] > 700) {
                     var add_bits = (int)((pe[gr][ch] - 700) / 1.4);
 
-                    const cod_info = l3_side.tt[gr][ch];
+                    var cod_info = l3_side.tt[gr][ch];
                     targ_bits[gr][ch] = (int)(res_factor * mean_bits);
 
                     /* short blocks use a little extra, no matter what the pe */

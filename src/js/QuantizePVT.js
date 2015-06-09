@@ -23,6 +23,29 @@
  */
 
 /* $Id: QuantizePVT.java,v 1.24 2011/05/24 20:48:06 kenchis Exp $ */
+var ScaleFac = require('./ScaleFac.js');
+var common = require('./common.js');
+var System = common.System;
+var VbrMode = common.VbrMode;
+var Float = common.Float;
+var ShortBlock = common.ShortBlock;
+var Util = common.Util;
+var Arrays = common.Arrays;
+var new_array_n = common.new_array_n;
+var new_byte = common.new_byte;
+var new_double = common.new_double;
+var new_float = common.new_float;
+var new_float_n = common.new_float_n;
+var new_int = common.new_int;
+var new_int_n = common.new_int_n;
+var Encoder = require('./Encoder.js');
+var MeanBits = require('./MeanBits.js');
+var LameInternalFlags = require('./LameInternalFlags.js');
+
+QuantizePVT.Q_MAX = (256 + 1);
+QuantizePVT.Q_MAX2 = 116;
+QuantizePVT.LARGE_BITS = 100000;
+QuantizePVT.IXMAX_VAL = 8206;
 
 function QuantizePVT() {
 
@@ -54,11 +77,11 @@ function QuantizePVT() {
     /**
      * ix always <= 8191+15. see count_bits()
      */
-    var IXMAX_VAL = 8206;
+    var IXMAX_VAL = QuantizePVT.IXMAX_VAL;
 
     var PRECALC_SIZE = (IXMAX_VAL + 2);
 
-    var Q_MAX = (256 + 1);
+    var Q_MAX = QuantizePVT.Q_MAX;
 
 
     /**
@@ -71,11 +94,10 @@ function QuantizePVT() {
      * for short block, 0+(15<<2)+7*8 = 15*4+56 = 116
      * </CODE>
      */
-    var Q_MAX2 = 116;
-    QuantizePVT.Q_MAX = Q_MAX;
-    QuantizePVT.Q_MAX2 = Q_MAX2;
+    var Q_MAX2 = QuantizePVT.Q_MAX2;
 
-    var LARGE_BITS = 100000;
+    var LARGE_BITS = QuantizePVT.LARGE_BITS;
+
 
     /**
      * Assuming dynamic range=96dB, this value should be 92
