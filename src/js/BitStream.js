@@ -771,7 +771,7 @@ function BitStream() {
         drain_into_ancillary(gfp, flushbits);
 
         /* check that the 100% of the last frame has been written to bitstream */
-        assert(gfc.header[last_ptr].write_timing + getframebits(gfp) == totbit);
+        assert(gfc.header[last_ptr].write_timing + this.getframebits(gfp) == totbit);
 
         /*
          * we have padded out all frames with ancillary data, which is the same

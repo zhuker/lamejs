@@ -12,6 +12,7 @@ var new_float = common.new_float;
 var new_float_n = common.new_float_n;
 var new_int = common.new_int;
 var new_int_n = common.new_int_n;
+var new_short_n = common.new_short_n;
 var PsyModel = require('./PsyModel.js');
 var LameGlobalFlags = require('./LameGlobalFlags.js');
 var LameInternalFlags = require('./LameInternalFlags.js');
@@ -1376,6 +1377,115 @@ function Lame() {
             gfc.in_buffer_nsamples = nsamples;
         }
     }
+
+    this.lame_encode_flush = function (gfp, mp3buffer, mp3bufferPos, mp3buffer_size) {
+        var gfc = gfp.internal_flags;
+        var buffer = new_short_n([2, 1152]);
+        var imp3 = 0, mp3count, mp3buffer_size_remaining;
+
+        /*
+         * we always add POSTDELAY=288 padding to make sure granule with real
+         * data can be complety decoded (because of 50% overlap with next
+         * granule
+         */
+        var end_padding;
+        var frames_left;
+        var samples_to_encode = gfc.mf_samples_to_encode - Encoder.POSTDELAY;
+        var mf_needed = calcNeeded(gfp);
+
+        /* Was flush already called? */
+        if (gfc.mf_samples_to_encode < 1) {
+            return 0;
+        }
+        mp3count = 0;
+
+        if (gfp.in_samplerate != gfp.out_samplerate) {
+            /*
+             * delay due to resampling; needs to be fixed, if resampling code
+             * gets changed
+             */
+            samples_to_encode += 16. * gfp.out_samplerate / gfp.in_samplerate;
+        }
+        end_padding = gfp.framesize - (samples_to_encode % gfp.framesize);
+        if (end_padding < 576)
+            end_padding += gfp.framesize;
+        gfp.encoder_padding = end_padding;
+
+        frames_left = (samples_to_encode + end_padding) / gfp.framesize;
+
+        /*
+         * send in a frame of 0 padding until all internal sample buffers are
+         * flushed
+         */
+        while (frames_left > 0 && imp3 >= 0) {
+            var bunch = mf_needed - gfc.mf_size;
+            var frame_num = gfp.frameNum;
+
+            bunch *= gfp.in_samplerate;
+            bunch /= gfp.out_samplerate;
+            if (bunch > 1152)
+                bunch = 1152;
+            if (bunch < 1)
+                bunch = 1;
+
+            mp3buffer_size_remaining = mp3buffer_size - mp3count;
+
+            /* if user specifed buffer size = 0, dont check size */
+            if (mp3buffer_size == 0)
+                mp3buffer_size_remaining = 0;
+
+            imp3 = this.lame_encode_buffer(gfp, buffer[0], buffer[1], bunch,
+                mp3buffer, mp3bufferPos, mp3buffer_size_remaining);
+
+            mp3bufferPos += imp3;
+            mp3count += imp3;
+            frames_left -= (frame_num != gfp.frameNum) ? 1 : 0;
+        }
+        /*
+         * Set gfc.mf_samples_to_encode to 0, so we may detect and break loops
+         * calling it more than once in a row.
+         */
+        gfc.mf_samples_to_encode = 0;
+
+        if (imp3 < 0) {
+            /* some type of fatal error */
+            return imp3;
+        }
+
+        mp3buffer_size_remaining = mp3buffer_size - mp3count;
+        /* if user specifed buffer size = 0, dont check size */
+        if (mp3buffer_size == 0)
+            mp3buffer_size_remaining = 0;
+
+        /* mp3 related stuff. bit buffer might still contain some mp3 data */
+        bs.flush_bitstream(gfp);
+        imp3 = bs.copy_buffer(gfc, mp3buffer, mp3bufferPos,
+            mp3buffer_size_remaining, 1);
+        if (imp3 < 0) {
+            /* some type of fatal error */
+            return imp3;
+        }
+        mp3bufferPos += imp3;
+        mp3count += imp3;
+        mp3buffer_size_remaining = mp3buffer_size - mp3count;
+        /* if user specifed buffer size = 0, dont check size */
+        if (mp3buffer_size == 0)
+            mp3buffer_size_remaining = 0;
+
+        if (gfp.write_id3tag_automatic) {
+            /* write a id3 tag to the bitstream */
+            id3.id3tag_write_v1(gfp);
+
+            imp3 = bs.copy_buffer(gfc, mp3buffer, mp3bufferPos,
+                mp3buffer_size_remaining, 0);
+
+            if (imp3 < 0) {
+                return imp3;
+            }
+            mp3count += imp3;
+        }
+        return mp3count;
+    };
 
     this.lame_encode_buffer = function (gfp, buffer_l, buffer_r, nsamples, mp3buf, mp3bufPos, mp3buf_size) {
         var gfc = gfp.internal_flags;

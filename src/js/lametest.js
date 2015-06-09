@@ -19,12 +19,11 @@ function GetAudio() {
     var parse;
     var mpg;
 
-    this.setModules = function(parse2, mpg2) {
+    this.setModules = function (parse2, mpg2) {
         parse = parse2;
         mpg = mpg2;
     }
 }
-
 
 
 function Parse() {
@@ -32,7 +31,7 @@ function Parse() {
     var id3;
     var pre;
 
-    this.setModules = function(ver2, id32, pre2) {
+    this.setModules = function (ver2, id32, pre2) {
         ver = ver2;
         id3 = id32;
         pre = pre2;
@@ -50,7 +49,7 @@ function ID3Tag() {
     var bits;
     var ver;
 
-    this.setModules = function(_bits, _ver) {
+    this.setModules = function (_bits, _ver) {
         bits = _bits;
         ver = _ver;
     }
@@ -115,3 +114,10 @@ var mp3bufPos = 0;
 var _sz = lame.lame_encode_buffer(gfp, left, right, remaining,
     mp3buf, mp3bufPos, mp3buf_size);
 console.log("lame_encode_buffer: " + _sz);
+for (var i = 0; i < _sz; i++) {
+    console.log(mp3buf[i]);
+}
+
+_sz = lame.lame_encode_flush(gfp, mp3buf, mp3bufPos, mp3buf_size);
+console.log("lame_encode_flush: " + _sz);
+

@@ -5,6 +5,9 @@ function new_int(count) {
     }
     return a;
 }
+function new_short(count) {
+    return new_int(count);
+}
 function new_float(count) {
     count = 0 | count;
     var a = new Array(count);
@@ -37,6 +40,19 @@ function new_int_n(args) {
     var A = [];
     for (var i = 0; i < sz; i++) {
         A.push(new_int_n(args));
+    }
+    return A;
+}
+
+function new_short_n(args) {
+    if (args.length == 1) {
+        return new_short(args[0]);
+    }
+    var sz = args[0];
+    args = args.slice(1);
+    var A = [];
+    for (var i = 0; i < sz; i++) {
+        A.push(new_short_n(args));
     }
     return A;
 }
@@ -132,5 +148,7 @@ module.exports = {
     "new_float": new_float,
     "new_float_n": new_float_n,
     "new_int": new_int,
-    "new_int_n": new_int_n
+    "new_int_n": new_int_n,
+    "new_short": new_short,
+    "new_short_n": new_short_n
 };
