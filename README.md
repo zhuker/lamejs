@@ -33,13 +33,44 @@ for (var i = 0; i < samples.length; i += sampleBlockSize) {
   sampleChunk = samples.subarray(i, i + sampleBlockSize);
   var mp3buf = mp3encoder.encoderBuffer(sampleChunk);
   if (mp3buf.length > 0) {
-  //TODO: write your mp3 here
+    //TODO: write your mp3 here
   }
 }
-  var mp3buf = mp3encoder.flush();   //finish writing mp3
-  if (mp3buf.length > 0) {
-  //TODO: finish writing your mp3 here
-  }
+var mp3buf = mp3encoder.flush();   //finish writing mp3
+
+if (mp3buf.length > 0) {
+    //TODO: finish writing your mp3 here
+}
+</script>
 ```
 
-</scptipt>
+# Stereo
+
+If you want to encode stereo mp3 use separate sample buffers for left and right channel
+
+```javascript
+<script src='lame.all.js'></script>
+<script>
+lib = new lamejs();
+mp3encoder = new lib.Mp3Encoder(2, 44100, 128);
+
+left = new Int16Array(44100); //one second of silence (get your data from the source you have)
+right = new Int16Array(44100); //one second of silence (get your data from the source you have)
+sampleBlockSize = 1152; //can be anything but make it a multiple of 576 to make encoders life easier
+
+for (var i = 0; i < samples.length; i += sampleBlockSize) {
+  leftChunk = left.subarray(i, i + sampleBlockSize);
+  rightChunk = right.subarray(i, i + sampleBlockSize);
+  var mp3buf = mp3encoder.encoderBuffer(leftChunk, rightChunk);
+  if (mp3buf.length > 0) {
+    //TODO: write your mp3 here
+  }
+}
+var mp3buf = mp3encoder.flush();   //finish writing mp3
+
+if (mp3buf.length > 0) {
+    //TODO: finish writing your mp3 here
+}
+</script>
+```
+
