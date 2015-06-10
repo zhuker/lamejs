@@ -7,7 +7,7 @@ lamejs is a rewrite of jump3r-code which is a rewrite of libmp3lame.
 
 ```javascript
 <script src='lame.all.js'></script>
-lib = lamejs();
+lib = new lamejs();
 mp3encoder = new lib.Mp3Encoder(1, 44100, 128); //mono 44.1khz encode to 128kbps
 samples = new Int16Array(44100); //one second of silence
 var mp3 = mp3encoder.encodeBuffer(samples); //encode mp3
@@ -20,7 +20,7 @@ Either see [example.html](https://github.com/zhuker/lamejs/blob/master/example.h
 ```javascript
 <script src='lame.all.js'></script>
 <script>
-lib = lamejs();
+lib = new lamejs();
 channels = 1; //1 for mono or 2 for stereo
 sampleRate = 44100; //44.1khz (normal mp3 samplerate)
 kbps = 128; //encode 128kbps mp3
