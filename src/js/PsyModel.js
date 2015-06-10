@@ -956,8 +956,7 @@ function PsyModel() {
                     m = max[b];
                 if (m < max[b + 1])
                     m = max[b + 1];
-                assert((gfc.numlines_l[b - 1] + gfc.numlines_l[b]
-                    + gfc.numlines_l[b + 1] - 1) > 0);
+                assert((gfc.numlines_l[b - 1] + gfc.numlines_l[b] + gfc.numlines_l[b + 1] - 1) > 0);
                 a = 20.0
                     * (m * 3.0 - a)
                     / (a * (gfc.numlines_l[b - 1] + gfc.numlines_l[b]
@@ -1704,8 +1703,7 @@ function PsyModel() {
                     m = max[b];
                 if (m < max[b + 1])
                     m = max[b + 1];
-                assert((gfc.numlines_s[b - 1] + gfc.numlines_s[b]
-                    + gfc.numlines_s[b + 1] - 1) > 0);
+                assert((gfc.numlines_s[b - 1] + gfc.numlines_s[b] + gfc.numlines_s[b + 1] - 1) > 0);
                 a = 20.0
                     * (m * 3.0 - a)
                     / (a * (gfc.numlines_s[b - 1] + gfc.numlines_s[b]

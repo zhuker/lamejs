@@ -15,8 +15,8 @@ var new_int_n = common.new_int_n;
 var assert = common.assert;
 
 var MeanBits = require('./MeanBits.js');
-var L3Side = require('./L3Side.js');
 var Encoder = require('./Encoder.js');
+var L3Side = require('./L3Side.js');
 var LameInternalFlags = require('./LameInternalFlags.js');
 
 function CBRNewIterationLoop(_quantize)  {

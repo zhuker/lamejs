@@ -64,6 +64,9 @@
  * </PRE>
  */
 
+var common = require('./common.js');
+var assert = common.assert;
+
 function Reservoir() {
 	var bs;
 

@@ -1,0 +1,42 @@
+<html>
+<body>Encoding mp3 from <code>testdata/Left44100.wav</code>
+</body>
+<script src="lame.all.js"></script>
+<script>
+    liblame = new lamejs();
+
+    function encodeMono(channels, sampleRate, samples) {
+        mp3enc = new liblame.Mp3Encoder(channels, sampleRate, 128);
+        var remaining = samples.length;
+        var maxSamples = 1152;
+        for (var i = 0; remaining >= maxSamples; i += maxSamples) {
+            var mono = samples.subarray(i, i + maxSamples);
+            var mp3buf = mp3enc.encodeBuffer(mono);
+            if (mp3buf.length > 0) {
+                //TODO write to output
+            }
+            remaining -= maxSamples;
+        }
+        var mp3buf = mp3enc.flush();
+        console.log('done encoding');
+    }
+
+    var wavFile = "testdata/Left44100.wav";
+
+    var request = new XMLHttpRequest();
+    request.open("GET", wavFile, true);
+    request.responseType = "arraybuffer";
+
+    // Our asynchronous callback
+    request.onload = function () {
+        audioData = request.response;
+        wav = liblame.WavHeader.readHeader(new DataView(audioData));
+        console.log('wav:', wav);
+        samples = new Uint16Array(audioData, wav.dataOffset, wav.dataLen / 2);
+        encodeMono(wav.channels, wav.sampleRate, samples);
+    };
+    request.send();
+
+    //    var encoder = lib.Mp3Encoder(1, 44100, 128);
+</script>
+</html>

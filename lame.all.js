@@ -138,7 +138,7 @@ VbrMode.vbr_mtrh = new VbrMode(4);
 VbrMode.vbr_default = VbrMode.vbr_mtrh;
 
 var assert = function (x) {
-    console.assert(x);
+    //console.assert(x);
 };
 
 var module_exports = {
@@ -159,299 +159,6 @@ var module_exports = {
     "new_short_n": new_short_n,
     "assert": assert
 };
-/*
- *      bit reservoir source file
- *
- *      Copyright (c) 1999-2000 Mark Taylor
- *
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Lesser General Public
- * License as published by the Free Software Foundation; either
- * version 2 of the License, or (at your option) any later version.
- *
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Library General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the
- * Free Software Foundation, Inc., 59 Temple Place - Suite 330,
- * Boston, MA 02111-1307, USA.
- */
-
-/* $Id: Reservoir.java,v 1.9 2011/05/24 20:48:06 kenchis Exp $ */
-
-//package mp3;
-
-/**
- * ResvFrameBegin:<BR>
- * Called (repeatedly) at the beginning of a frame. Updates the maximum size of
- * the reservoir, and checks to make sure main_data_begin was set properly by
- * the formatter<BR>
- * Background information:
- * 
- * This is the original text from the ISO standard. Because of sooo many bugs
- * and irritations correcting comments are added in brackets []. A '^W' means
- * you should remove the last word.
- * 
- * <PRE>
- *  1. The following rule can be used to calculate the maximum
- *     number of bits used for one granule [^W frame]:<BR>
- *     At the highest possible bitrate of Layer III (320 kbps
- *     per stereo signal [^W^W^W], 48 kHz) the frames must be of
- *     [^W^W^W are designed to have] constant length, i.e.
- *     one buffer [^W^W the frame] length is:<BR>
- * 
- *         320 kbps * 1152/48 kHz = 7680 bit = 960 byte
- * 
- *     This value is used as the maximum buffer per channel [^W^W] at
- *     lower bitrates [than 320 kbps]. At 64 kbps mono or 128 kbps
- *     stereo the main granule length is 64 kbps * 576/48 kHz = 768 bit
- *     [per granule and channel] at 48 kHz sampling frequency.
- *     This means that there is a maximum deviation (short time buffer
- *     [= reservoir]) of 7680 - 2*2*768 = 4608 bits is allowed at 64 kbps.
- *     The actual deviation is equal to the number of bytes [with the
- *     meaning of octets] denoted by the main_data_end offset pointer.
- *     The actual maximum deviation is (2^9-1)*8 bit = 4088 bits
- *     [for MPEG-1 and (2^8-1)*8 bit for MPEG-2, both are hard limits].
- *     ... The xchange of buffer bits between the left and right channel
- *     is allowed without restrictions [exception: dual channel].
- *     Because of the [constructed] constraint on the buffer size
- *     main_data_end is always set to 0 in the case of bit_rate_index==14,
- *     i.e. data rate 320 kbps per stereo signal [^W^W^W]. In this case
- *     all data are allocated between adjacent header [^W sync] words
- *     [, i.e. there is no buffering at all].
- * </PRE>
- */
-
-function Reservoir() {
-	var bs;
-
-	this.setModules  = function(_bs) {
-		bs = _bs;
-	}
-
-	this.ResvFrameBegin = function(gfp, mean_bits) {
-		var gfc = gfp.internal_flags;
-		var maxmp3buf;
-		var l3_side = gfc.l3_side;
-
-		var frameLength = bs.getframebits(gfp);
-		mean_bits.bits = (frameLength - gfc.sideinfo_len * 8) / gfc.mode_gr;
-
-		/**
-		 * <PRE>
-		 *  Meaning of the variables:
-		 *      resvLimit: (0, 8, ..., 8*255 (MPEG-2), 8*511 (MPEG-1))
-		 *          Number of bits can be stored in previous frame(s) due to
-		 *          counter size constaints
-		 *      maxmp3buf: ( ??? ... 8*1951 (MPEG-1 and 2), 8*2047 (MPEG-2.5))
-		 *          Number of bits allowed to encode one frame (you can take 8*511 bit
-		 *          from the bit reservoir and at most 8*1440 bit from the current
-		 *          frame (320 kbps, 32 kHz), so 8*1951 bit is the largest possible
-		 *          value for MPEG-1 and -2)
-		 * 
-		 *          maximum allowed granule/channel size times 4 = 8*2047 bits.,
-		 *          so this is the absolute maximum supported by the format.
-		 * 
-		 * 
-		 *      fullFrameBits:  maximum number of bits available for encoding
-		 *                      the current frame.
-		 * 
-		 *      mean_bits:      target number of bits per granule.
-		 * 
-		 *      frameLength:
-		 * 
-		 *      gfc.ResvMax:   maximum allowed reservoir
-		 * 
-		 *      gfc.ResvSize:  current reservoir size
-		 * 
-		 *      l3_side.resvDrain_pre:
-		 *         ancillary data to be added to previous frame:
-		 *         (only usefull in VBR modes if it is possible to have
-		 *         maxmp3buf < fullFrameBits)).  Currently disabled,
-		 *         see #define NEW_DRAIN
-		 *         2010-02-13: RH now enabled, it seems to be needed for CBR too,
-		 *                     as there exists one example, where the FhG decoder
-		 *                     can't decode a -b320 CBR file anymore.
-		 * 
-		 *      l3_side.resvDrain_post:
-		 *         ancillary data to be added to this frame:
-		 * 
-		 * </PRE>
-		 */
-
-		/* main_data_begin has 9 bits in MPEG-1, 8 bits MPEG-2 */
-		var resvLimit = (8 * 256) * gfc.mode_gr - 8;
-
-		/*
-		 * maximum allowed frame size. dont use more than this number of bits,
-		 * even if the frame has the space for them:
-		 */
-		if (gfp.brate > 320) {
-			/* in freeformat the buffer is constant */
-			maxmp3buf = 8 * ((int) ((gfp.brate * 1000)
-					/ (gfp.out_samplerate / 1152) / 8 + .5));
-		} else {
-			/*
-			 * all mp3 decoders should have enough buffer to handle this value:
-			 * size of a 320kbps 32kHz frame
-			 */
-			maxmp3buf = 8 * 1440;
-
-			/*
-			 * Bouvigne suggests this more lax interpretation of the ISO doc
-			 * instead of using 8*960.
-			 */
-
-			if (gfp.strict_ISO) {
-				maxmp3buf = 8 * ((int) (320000 / (gfp.out_samplerate / 1152) / 8 + .5));
-			}
-		}
-
-		gfc.ResvMax = maxmp3buf - frameLength;
-		if (gfc.ResvMax > resvLimit)
-			gfc.ResvMax = resvLimit;
-		if (gfc.ResvMax < 0 || gfp.disable_reservoir)
-			gfc.ResvMax = 0;
-
-		var fullFrameBits = mean_bits.bits * gfc.mode_gr
-				+ Math.min(gfc.ResvSize, gfc.ResvMax);
-
-		if (fullFrameBits > maxmp3buf)
-			fullFrameBits = maxmp3buf;
-
-		assert (0 == gfc.ResvMax % 8);
-		assert (gfc.ResvMax >= 0);
-
-		l3_side.resvDrain_pre = 0;
-
-		// frame analyzer code
-		if (gfc.pinfo != null) {
-			/*
-			 * expected bits per channel per granule [is this also right for
-			 * mono/stereo, MPEG-1/2 ?]
-			 */
-			gfc.pinfo.mean_bits = mean_bits.bits / 2;
-			gfc.pinfo.resvsize = gfc.ResvSize;
-		}
-
-		return fullFrameBits;
-	}
-
-	/**
-	 * returns targ_bits: target number of bits to use for 1 granule<BR>
-	 * extra_bits: amount extra available from reservoir<BR>
-	 * Mark Taylor 4/99
-	 */
-	this.ResvMaxBits = function(gfp, mean_bits, targ_bits, cbr) {
-		var gfc = gfp.internal_flags;
-		var add_bits;
-        var ResvSize = gfc.ResvSize, ResvMax = gfc.ResvMax;
-
-		/* compensate the saved bits used in the 1st granule */
-		if (cbr != 0)
-			ResvSize += mean_bits;
-
-		if ((gfc.substep_shaping & 1) != 0)
-			ResvMax *= 0.9;
-
-		targ_bits.bits = mean_bits;
-
-		/* extra bits if the reservoir is almost full */
-		if (ResvSize * 10 > ResvMax * 9) {
-			add_bits = ResvSize - (ResvMax * 9) / 10;
-			targ_bits.bits += add_bits;
-			gfc.substep_shaping |= 0x80;
-		} else {
-			add_bits = 0;
-			gfc.substep_shaping &= 0x7f;
-			/*
-			 * build up reservoir. this builds the reservoir a little slower
-			 * than FhG. It could simple be mean_bits/15, but this was rigged to
-			 * always produce 100 (the old value) at 128kbs
-			 */
-			if (!gfp.disable_reservoir && 0 == (gfc.substep_shaping & 1))
-				targ_bits.bits -= .1 * mean_bits;
-		}
-
-		/* amount from the reservoir we are allowed to use. ISO says 6/10 */
-		var extra_bits = (ResvSize < (gfc.ResvMax * 6) / 10 ? ResvSize
-				: (gfc.ResvMax * 6) / 10);
-		extra_bits -= add_bits;
-
-		if (extra_bits < 0)
-			extra_bits = 0;
-		return extra_bits;
-	}
-
-	/**
-	 * Called after a granule's bit allocation. Readjusts the size of the
-	 * reservoir to reflect the granule's usage.
-	 */
-	this.ResvAdjust = function(gfc, gi) {
-		gfc.ResvSize -= gi.part2_3_length + gi.part2_length;
-	}
-
-	/**
-	 * Called after all granules in a frame have been allocated. Makes sure that
-	 * the reservoir size is within limits, possibly by adding stuffing bits.
-	 */
-	this.ResvFrameEnd = function(gfc, mean_bits) {
-		var over_bits;
-		var l3_side = gfc.l3_side;
-
-		gfc.ResvSize += mean_bits * gfc.mode_gr;
-		var stuffingBits = 0;
-		l3_side.resvDrain_post = 0;
-		l3_side.resvDrain_pre = 0;
-
-		/* we must be byte aligned */
-		if ((over_bits = gfc.ResvSize % 8) != 0)
-			stuffingBits += over_bits;
-
-		over_bits = (gfc.ResvSize - stuffingBits) - gfc.ResvMax;
-		if (over_bits > 0) {
-			assert (0 == over_bits % 8);
-			assert (over_bits >= 0);
-			stuffingBits += over_bits;
-		}
-
-		/*
-		 * NOTE: enabling the NEW_DRAIN code fixes some problems with FhG
-		 * decoder shipped with MS Windows operating systems. Using this, it is
-		 * even possible to use Gabriel's lax buffer consideration again, which
-		 * assumes, any decoder should have a buffer large enough for a 320 kbps
-		 * frame at 32 kHz sample rate.
-		 * 
-		 * old drain code: lame -b320 BlackBird.wav --. does not play with
-		 * GraphEdit.exe using FhG decoder V1.5 Build 50
-		 * 
-		 * new drain code: lame -b320 BlackBird.wav --. plays fine with
-		 * GraphEdit.exe using FhG decoder V1.5 Build 50
-		 * 
-		 * Robert Hegemann, 2010-02-13.
-		 */
-		/*
-		 * drain as many bits as possible into previous frame ancillary data In
-		 * particular, in VBR mode ResvMax may have changed, and we have to make
-		 * sure main_data_begin does not create a reservoir bigger than ResvMax
-		 * mt 4/00
-		 */
-		{
-			var mdb_bytes = Math.min(l3_side.main_data_begin * 8, stuffingBits) / 8;
-			l3_side.resvDrain_pre += 8 * mdb_bytes;
-			stuffingBits -= 8 * mdb_bytes;
-			gfc.ResvSize -= 8 * mdb_bytes;
-			l3_side.main_data_begin -= mdb_bytes;
-		}
-		/* drain the rest into this frames ancillary data */
-		l3_side.resvDrain_post += stuffingBits;
-		gfc.ResvSize -= stuffingBits;
-	}
-}
-
 //package mp3;
 
 /* MPEG modes */
@@ -1644,7 +1351,6 @@ function Takehiro() {
     function quantize_lines_xrpow_01(l, istep, xr, xrPos, ix, ixPos) {
         var compareval0 = (1.0 - 0.4054) / istep;
 
-        assert(l > 0);
         l = l >> 1;
         while ((l--) != 0) {
             ix[ixPos++] = (compareval0 > xr[xrPos++]) ? 0 : 1;
@@ -1665,7 +1371,6 @@ function Takehiro() {
      * some ASM for XRPOW_FTOI().
      */
     function quantize_lines_xrpow(l, istep, xr, xrPos, ix, ixPos) {
-        assert(l > 0);
 
         l = l >> 1;
         var remaining = l % 2;
@@ -1748,7 +1453,6 @@ function Takehiro() {
                         : 0)) << (codInfo.scalefac_scale + 1))
                     - codInfo.subblock_gain[codInfo.window[sfb]] * 8;
             }
-            assert(codInfo.width[sfb] >= 0);
             if (prev_data_use && (prevNoise.step[sfb] == step)) {
                 /*
                  * do not recompute this part, but compute accumulated lines
@@ -2107,12 +1811,10 @@ function Takehiro() {
             a2 = gi.big_values;
 
         } else if (gi.block_type == Encoder.NORM_TYPE) {
-            assert(i <= 576);
             /* bv_scf has 576 entries (0..575) */
             a1 = gi.region0_count = gfc.bv_scf[i - 2];
             a2 = gi.region1_count = gfc.bv_scf[i - 1];
 
-            assert(a1 + a2 + 2 < Encoder.SBPSY_l);
             a2 = gfc.scalefac_band.l[a1 + a2 + 2];
             a1 = gfc.scalefac_band.l[a1 + 1];
             if (a2 < i) {
@@ -2136,8 +1838,6 @@ function Takehiro() {
         a1 = Math.min(a1, i);
         a2 = Math.min(a2, i);
 
-        assert(a1 >= 0);
-        assert(a2 >= 0);
 
         /* Count the number of bits necessary to code the bigvalues region. */
         if (0 < a1) {
@@ -2187,7 +1887,6 @@ function Takehiro() {
             var roundfac = 0.634521682242439 / qupvt.IPOW20(gain);
             for (var sfb = 0; sfb < gi.sfbmax; sfb++) {
                 var width = gi.width[sfb];
-                assert(width >= 0);
                 if (0 == gfc.pseudohalf[sfb]) {
                     j += width;
                 } else {
@@ -2298,7 +1997,6 @@ function Takehiro() {
         var a1 = 0;
         var a2 = 0;
 
-        assert(i <= 576);
 
         for (; i > cod_info2.big_values; i -= 4) {
             var p = ((ix[i - 4] * 2 + ix[i - 3]) * 2 + ix[i - 2]) * 2
@@ -2415,7 +2113,6 @@ function Takehiro() {
         j = 0;
         for (sfb = 0; sfb < gi.sfbmax; sfb++) {
             var width = gi.width[sfb];
-            assert(width >= 0);
             j += width;
             for (l = -width; l < 0; l++) {
                 if (gi.l3_enc[l + j] != 0)
@@ -2526,7 +2223,6 @@ function Takehiro() {
         var tab;
         var scalefac = cod_info.scalefac;
 
-        assert(all_scalefactors_not_negative(scalefac, cod_info.sfbmax));
 
         if (cod_info.block_type == Encoder.SHORT_TYPE) {
             tab = scale_short;
@@ -2664,7 +2360,6 @@ function Takehiro() {
             }
         }
         if (!over) {
-            assert(cod_info.sfb_partition_table != null);
             cod_info.part2_length = 0;
             for (partition = 0; partition < 4; partition++)
                 cod_info.part2_length += cod_info.slen[partition]
@@ -2683,8 +2378,8 @@ function Takehiro() {
     this.huffman_init = function (gfc) {
         for (var i = 2; i <= 576; i += 2) {
             var scfb_anz = 0, bv_index;
-            while (gfc.scalefac_band.l[++scfb_anz] < i) {
-            }
+            while (gfc.scalefac_band.l[++scfb_anz] < i)
+                ;
 
             bv_index = subdv_table[scfb_anz][0]; // .region0_count
             while (gfc.scalefac_band.l[bv_index + 1] > i)
@@ -2712,6 +2407,296 @@ function Takehiro() {
             gfc.bv_scf[i - 1] = bv_index;
         }
     }
+}
+
+/*
+ *      bit reservoir source file
+ *
+ *      Copyright (c) 1999-2000 Mark Taylor
+ *
+ * This library is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2 of the License, or (at your option) any later version.
+ *
+ * This library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Library General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with this library; if not, write to the
+ * Free Software Foundation, Inc., 59 Temple Place - Suite 330,
+ * Boston, MA 02111-1307, USA.
+ */
+
+/* $Id: Reservoir.java,v 1.9 2011/05/24 20:48:06 kenchis Exp $ */
+
+//package mp3;
+
+/**
+ * ResvFrameBegin:<BR>
+ * Called (repeatedly) at the beginning of a frame. Updates the maximum size of
+ * the reservoir, and checks to make sure main_data_begin was set properly by
+ * the formatter<BR>
+ * Background information:
+ * 
+ * This is the original text from the ISO standard. Because of sooo many bugs
+ * and irritations correcting comments are added in brackets []. A '^W' means
+ * you should remove the last word.
+ * 
+ * <PRE>
+ *  1. The following rule can be used to calculate the maximum
+ *     number of bits used for one granule [^W frame]:<BR>
+ *     At the highest possible bitrate of Layer III (320 kbps
+ *     per stereo signal [^W^W^W], 48 kHz) the frames must be of
+ *     [^W^W^W are designed to have] constant length, i.e.
+ *     one buffer [^W^W the frame] length is:<BR>
+ * 
+ *         320 kbps * 1152/48 kHz = 7680 bit = 960 byte
+ * 
+ *     This value is used as the maximum buffer per channel [^W^W] at
+ *     lower bitrates [than 320 kbps]. At 64 kbps mono or 128 kbps
+ *     stereo the main granule length is 64 kbps * 576/48 kHz = 768 bit
+ *     [per granule and channel] at 48 kHz sampling frequency.
+ *     This means that there is a maximum deviation (short time buffer
+ *     [= reservoir]) of 7680 - 2*2*768 = 4608 bits is allowed at 64 kbps.
+ *     The actual deviation is equal to the number of bytes [with the
+ *     meaning of octets] denoted by the main_data_end offset pointer.
+ *     The actual maximum deviation is (2^9-1)*8 bit = 4088 bits
+ *     [for MPEG-1 and (2^8-1)*8 bit for MPEG-2, both are hard limits].
+ *     ... The xchange of buffer bits between the left and right channel
+ *     is allowed without restrictions [exception: dual channel].
+ *     Because of the [constructed] constraint on the buffer size
+ *     main_data_end is always set to 0 in the case of bit_rate_index==14,
+ *     i.e. data rate 320 kbps per stereo signal [^W^W^W]. In this case
+ *     all data are allocated between adjacent header [^W sync] words
+ *     [, i.e. there is no buffering at all].
+ * </PRE>
+ */
+
+
+function Reservoir() {
+	var bs;
+
+	this.setModules  = function(_bs) {
+		bs = _bs;
+	}
+
+	this.ResvFrameBegin = function(gfp, mean_bits) {
+		var gfc = gfp.internal_flags;
+		var maxmp3buf;
+		var l3_side = gfc.l3_side;
+
+		var frameLength = bs.getframebits(gfp);
+		mean_bits.bits = (frameLength - gfc.sideinfo_len * 8) / gfc.mode_gr;
+
+		/**
+		 * <PRE>
+		 *  Meaning of the variables:
+		 *      resvLimit: (0, 8, ..., 8*255 (MPEG-2), 8*511 (MPEG-1))
+		 *          Number of bits can be stored in previous frame(s) due to
+		 *          counter size constaints
+		 *      maxmp3buf: ( ??? ... 8*1951 (MPEG-1 and 2), 8*2047 (MPEG-2.5))
+		 *          Number of bits allowed to encode one frame (you can take 8*511 bit
+		 *          from the bit reservoir and at most 8*1440 bit from the current
+		 *          frame (320 kbps, 32 kHz), so 8*1951 bit is the largest possible
+		 *          value for MPEG-1 and -2)
+		 * 
+		 *          maximum allowed granule/channel size times 4 = 8*2047 bits.,
+		 *          so this is the absolute maximum supported by the format.
+		 * 
+		 * 
+		 *      fullFrameBits:  maximum number of bits available for encoding
+		 *                      the current frame.
+		 * 
+		 *      mean_bits:      target number of bits per granule.
+		 * 
+		 *      frameLength:
+		 * 
+		 *      gfc.ResvMax:   maximum allowed reservoir
+		 * 
+		 *      gfc.ResvSize:  current reservoir size
+		 * 
+		 *      l3_side.resvDrain_pre:
+		 *         ancillary data to be added to previous frame:
+		 *         (only usefull in VBR modes if it is possible to have
+		 *         maxmp3buf < fullFrameBits)).  Currently disabled,
+		 *         see #define NEW_DRAIN
+		 *         2010-02-13: RH now enabled, it seems to be needed for CBR too,
+		 *                     as there exists one example, where the FhG decoder
+		 *                     can't decode a -b320 CBR file anymore.
+		 * 
+		 *      l3_side.resvDrain_post:
+		 *         ancillary data to be added to this frame:
+		 * 
+		 * </PRE>
+		 */
+
+		/* main_data_begin has 9 bits in MPEG-1, 8 bits MPEG-2 */
+		var resvLimit = (8 * 256) * gfc.mode_gr - 8;
+
+		/*
+		 * maximum allowed frame size. dont use more than this number of bits,
+		 * even if the frame has the space for them:
+		 */
+		if (gfp.brate > 320) {
+			/* in freeformat the buffer is constant */
+			maxmp3buf = 8 * ((int) ((gfp.brate * 1000)
+					/ (gfp.out_samplerate / 1152) / 8 + .5));
+		} else {
+			/*
+			 * all mp3 decoders should have enough buffer to handle this value:
+			 * size of a 320kbps 32kHz frame
+			 */
+			maxmp3buf = 8 * 1440;
+
+			/*
+			 * Bouvigne suggests this more lax interpretation of the ISO doc
+			 * instead of using 8*960.
+			 */
+
+			if (gfp.strict_ISO) {
+				maxmp3buf = 8 * ((int) (320000 / (gfp.out_samplerate / 1152) / 8 + .5));
+			}
+		}
+
+		gfc.ResvMax = maxmp3buf - frameLength;
+		if (gfc.ResvMax > resvLimit)
+			gfc.ResvMax = resvLimit;
+		if (gfc.ResvMax < 0 || gfp.disable_reservoir)
+			gfc.ResvMax = 0;
+
+		var fullFrameBits = mean_bits.bits * gfc.mode_gr
+				+ Math.min(gfc.ResvSize, gfc.ResvMax);
+
+		if (fullFrameBits > maxmp3buf)
+			fullFrameBits = maxmp3buf;
+
+
+		l3_side.resvDrain_pre = 0;
+
+		// frame analyzer code
+		if (gfc.pinfo != null) {
+			/*
+			 * expected bits per channel per granule [is this also right for
+			 * mono/stereo, MPEG-1/2 ?]
+			 */
+			gfc.pinfo.mean_bits = mean_bits.bits / 2;
+			gfc.pinfo.resvsize = gfc.ResvSize;
+		}
+
+		return fullFrameBits;
+	}
+
+	/**
+	 * returns targ_bits: target number of bits to use for 1 granule<BR>
+	 * extra_bits: amount extra available from reservoir<BR>
+	 * Mark Taylor 4/99
+	 */
+	this.ResvMaxBits = function(gfp, mean_bits, targ_bits, cbr) {
+		var gfc = gfp.internal_flags;
+		var add_bits;
+        var ResvSize = gfc.ResvSize, ResvMax = gfc.ResvMax;
+
+		/* compensate the saved bits used in the 1st granule */
+		if (cbr != 0)
+			ResvSize += mean_bits;
+
+		if ((gfc.substep_shaping & 1) != 0)
+			ResvMax *= 0.9;
+
+		targ_bits.bits = mean_bits;
+
+		/* extra bits if the reservoir is almost full */
+		if (ResvSize * 10 > ResvMax * 9) {
+			add_bits = ResvSize - (ResvMax * 9) / 10;
+			targ_bits.bits += add_bits;
+			gfc.substep_shaping |= 0x80;
+		} else {
+			add_bits = 0;
+			gfc.substep_shaping &= 0x7f;
+			/*
+			 * build up reservoir. this builds the reservoir a little slower
+			 * than FhG. It could simple be mean_bits/15, but this was rigged to
+			 * always produce 100 (the old value) at 128kbs
+			 */
+			if (!gfp.disable_reservoir && 0 == (gfc.substep_shaping & 1))
+				targ_bits.bits -= .1 * mean_bits;
+		}
+
+		/* amount from the reservoir we are allowed to use. ISO says 6/10 */
+		var extra_bits = (ResvSize < (gfc.ResvMax * 6) / 10 ? ResvSize
+				: (gfc.ResvMax * 6) / 10);
+		extra_bits -= add_bits;
+
+		if (extra_bits < 0)
+			extra_bits = 0;
+		return extra_bits;
+	}
+
+	/**
+	 * Called after a granule's bit allocation. Readjusts the size of the
+	 * reservoir to reflect the granule's usage.
+	 */
+	this.ResvAdjust = function(gfc, gi) {
+		gfc.ResvSize -= gi.part2_3_length + gi.part2_length;
+	}
+
+	/**
+	 * Called after all granules in a frame have been allocated. Makes sure that
+	 * the reservoir size is within limits, possibly by adding stuffing bits.
+	 */
+	this.ResvFrameEnd = function(gfc, mean_bits) {
+		var over_bits;
+		var l3_side = gfc.l3_side;
+
+		gfc.ResvSize += mean_bits * gfc.mode_gr;
+		var stuffingBits = 0;
+		l3_side.resvDrain_post = 0;
+		l3_side.resvDrain_pre = 0;
+
+		/* we must be byte aligned */
+		if ((over_bits = gfc.ResvSize % 8) != 0)
+			stuffingBits += over_bits;
+
+		over_bits = (gfc.ResvSize - stuffingBits) - gfc.ResvMax;
+		if (over_bits > 0) {
+			stuffingBits += over_bits;
+		}
+
+		/*
+		 * NOTE: enabling the NEW_DRAIN code fixes some problems with FhG
+		 * decoder shipped with MS Windows operating systems. Using this, it is
+		 * even possible to use Gabriel's lax buffer consideration again, which
+		 * assumes, any decoder should have a buffer large enough for a 320 kbps
+		 * frame at 32 kHz sample rate.
+		 * 
+		 * old drain code: lame -b320 BlackBird.wav --. does not play with
+		 * GraphEdit.exe using FhG decoder V1.5 Build 50
+		 * 
+		 * new drain code: lame -b320 BlackBird.wav --. plays fine with
+		 * GraphEdit.exe using FhG decoder V1.5 Build 50
+		 * 
+		 * Robert Hegemann, 2010-02-13.
+		 */
+		/*
+		 * drain as many bits as possible into previous frame ancillary data In
+		 * particular, in VBR mode ResvMax may have changed, and we have to make
+		 * sure main_data_begin does not create a reservoir bigger than ResvMax
+		 * mt 4/00
+		 */
+		{
+			var mdb_bytes = Math.min(l3_side.main_data_begin * 8, stuffingBits) / 8;
+			l3_side.resvDrain_pre += 8 * mdb_bytes;
+			stuffingBits -= 8 * mdb_bytes;
+			gfc.ResvSize -= 8 * mdb_bytes;
+			l3_side.main_data_begin -= mdb_bytes;
+		}
+		/* drain the rest into this frames ancillary data */
+		l3_side.resvDrain_post += stuffingBits;
+		gfc.ResvSize -= stuffingBits;
+	}
 }
 
 
@@ -2785,7 +2770,6 @@ function BitStream() {
             bit_rate = Tables.bitrate_table[gfp.version][gfc.bitrate_index];
         else
             bit_rate = gfp.brate;
-        assert(8 <= bit_rate && bit_rate <= 640);
 
         /* main encoding routine toggles padding on and off */
         /* one Layer3 Slot consists of 8 bits */
@@ -2804,15 +2788,12 @@ function BitStream() {
      * write j bits into the bit stream
      */
     function putbits2(gfc, val, j) {
-        assert(j < MAX_LENGTH - 2);
 
         while (j > 0) {
             var k;
             if (bufBitIdx == 0) {
                 bufBitIdx = 8;
                 bufByteIdx++;
-                assert(bufByteIdx < Lame.LAME_MAXMP3BUFFER);
-                assert(gfc.header[gfc.w_ptr].write_timing >= totbit);
                 if (gfc.header[gfc.w_ptr].write_timing == totbit) {
                     putheader_bits(gfc);
                 }
@@ -2824,9 +2805,7 @@ function BitStream() {
 
             bufBitIdx -= k;
 
-            assert(j < MAX_LENGTH);
             /* 32 too large on 32 bit machines */
-            assert(bufBitIdx < MAX_LENGTH);
 
             buf[bufByteIdx] |= ((val >> j) << bufBitIdx);
             totbit += k;
@@ -2837,14 +2816,12 @@ function BitStream() {
      * write j bits into the bit stream, ignoring frame headers
      */
     function putbits_noheaders(gfc, val, j) {
-        assert(j < MAX_LENGTH - 2);
 
         while (j > 0) {
             var k;
             if (bufBitIdx == 0) {
                 bufBitIdx = 8;
                 bufByteIdx++;
-                assert(bufByteIdx < Lame.LAME_MAXMP3BUFFER);
                 buf[bufByteIdx] = 0;
             }
 
@@ -2853,9 +2830,7 @@ function BitStream() {
 
             bufBitIdx -= k;
 
-            assert(j < MAX_LENGTH);
             /* 32 too large on 32 bit machines */
-            assert(bufBitIdx < MAX_LENGTH);
 
             buf[bufByteIdx] |= ((val >> j) << bufBitIdx);
             totbit += k;
@@ -2871,7 +2846,6 @@ function BitStream() {
     function drain_into_ancillary(gfp, remainingBits) {
         var gfc = gfp.internal_flags;
         var i;
-        assert(remainingBits >= 0);
 
         if (remainingBits >= 8) {
             putbits2(gfc, 0x4c, 8);
@@ -2904,7 +2878,6 @@ function BitStream() {
             gfc.ancillary_flag ^= (!gfp.disable_reservoir ? 1 : 0);
         }
 
-        assert(remainingBits == 0);
 
     }
 
@@ -2917,7 +2890,6 @@ function BitStream() {
         while (j > 0) {
             var k = Math.min(j, 8 - (ptr & 7));
             j -= k;
-            assert(j < MAX_LENGTH);
             /* >> 32 too large for 32 bit machines */
 
             gfc.header[gfc.h_ptr].buf[ptr >> 3] |= ((val >> j)) << (8 - (ptr & 7) - k);
@@ -2983,7 +2955,6 @@ function BitStream() {
 
         if (gfp.version == 1) {
             /* MPEG1 */
-            assert(l3_side.main_data_begin >= 0);
             writeheader(gfc, (l3_side.main_data_begin), 9);
 
             if (gfc.channels_out == 2)
@@ -3035,8 +3006,6 @@ function BitStream() {
                             gi.table_select[2] = 16;
                         writeheader(gfc, gi.table_select[2], 5);
 
-                        assert(0 <= gi.region0_count && gi.region0_count < 16);
-                        assert(0 <= gi.region1_count && gi.region1_count < 8);
                         writeheader(gfc, gi.region0_count, 4);
                         writeheader(gfc, gi.region1_count, 3);
                     }
@@ -3047,7 +3016,6 @@ function BitStream() {
             }
         } else {
             /* MPEG2 */
-            assert(l3_side.main_data_begin >= 0);
             writeheader(gfc, (l3_side.main_data_begin), 8);
             writeheader(gfc, l3_side.private_bits, gfc.channels_out);
 
@@ -3088,8 +3056,6 @@ function BitStream() {
                         gi.table_select[2] = 16;
                     writeheader(gfc, gi.table_select[2], 5);
 
-                    assert(0 <= gi.region0_count && gi.region0_count < 16);
-                    assert(0 <= gi.region1_count && gi.region1_count < 8);
                     writeheader(gfc, gi.region0_count, 4);
                     writeheader(gfc, gi.region1_count, 3);
                 }
@@ -3106,7 +3072,6 @@ function BitStream() {
 
         {
             var old = gfc.h_ptr;
-            assert(gfc.header[old].ptr == gfc.sideinfo_len * 8);
 
             gfc.h_ptr = (old + 1) & (LameInternalFlags.MAX_HEADER_BUF - 1);
             gfc.header[gfc.h_ptr].write_timing = gfc.header[old].write_timing
@@ -3128,7 +3093,6 @@ function BitStream() {
 
         var ix = gi.big_values;
         var xr = gi.big_values;
-        assert(gi.count1table_select < 2);
 
         for (i = (gi.count1 - gi.big_values) / 4; i > 0; --i) {
             var huffbits = 0;
@@ -3139,7 +3103,6 @@ function BitStream() {
                 p += 8;
                 if (gi.xr[xr + 0] < 0)
                     huffbits++;
-                assert(v <= 1);
             }
 
             v = gi.l3_enc[ix + 1];
@@ -3148,7 +3111,6 @@ function BitStream() {
                 huffbits *= 2;
                 if (gi.xr[xr + 1] < 0)
                     huffbits++;
-                assert(v <= 1);
             }
 
             v = gi.l3_enc[ix + 2];
@@ -3157,7 +3119,6 @@ function BitStream() {
                 huffbits *= 2;
                 if (gi.xr[xr + 2] < 0)
                     huffbits++;
-                assert(v <= 1);
             }
 
             v = gi.l3_enc[ix + 3];
@@ -3166,7 +3127,6 @@ function BitStream() {
                 huffbits *= 2;
                 if (gi.xr[xr + 3] < 0)
                     huffbits++;
-                assert(v <= 1);
             }
 
             ix += 4;
@@ -3184,7 +3144,6 @@ function BitStream() {
         var h = Tables.ht[tableindex];
         var bits = 0;
 
-        assert(tableindex < 32);
         if (0 == tableindex)
             return bits;
 
@@ -3207,7 +3166,6 @@ function BitStream() {
                 /* use ESC-words */
                 if (x1 > 14) {
                     var linbits_x1 = x1 - 15;
-                    assert(linbits_x1 <= h.linmax);
                     ext |= linbits_x1 << 1;
                     xbits = linbits;
                     x1 = 15;
@@ -3215,7 +3173,6 @@ function BitStream() {
 
                 if (x2 > 14) {
                     var linbits_x2 = x2 - 15;
-                    assert(linbits_x2 <= h.linmax);
                     ext <<= linbits;
                     ext |= linbits_x2;
                     xbits += linbits;
@@ -3231,14 +3188,11 @@ function BitStream() {
                 cbits--;
             }
 
-            assert((x1 | x2) < 16);
 
             x1 = x1 * xlen + x2;
             xbits -= cbits;
             cbits += h.hlen[x1];
 
-            assert(cbits <= MAX_LENGTH);
-            assert(xbits <= MAX_LENGTH);
 
             putbits2(gfc, h.table[x1], cbits);
             putbits2(gfc, ext, xbits);
@@ -3268,15 +3222,10 @@ function BitStream() {
         var region1Start, region2Start;
 
         bigvalues = gi.big_values;
-        assert(0 <= bigvalues && bigvalues <= 576);
 
         var i = gi.region0_count + 1;
-        assert(0 <= i);
-        assert(i < gfc.scalefac_band.l.length);
         region1Start = gfc.scalefac_band.l[i];
         i += gi.region1_count + 1;
-        assert(0 <= i);
-        assert(i < gfc.scalefac_band.l.length);
         region2Start = gfc.scalefac_band.l[i];
 
         if (region1Start > bigvalues)
@@ -3320,7 +3269,6 @@ function BitStream() {
                         putbits2(gfc, gi.scalefac[sfb], slen2);
                         data_bits += slen2;
                     }
-                    assert(data_bits == gi.part2_length);
 
                     if (gi.block_type == Encoder.SHORT_TYPE) {
                         data_bits += ShortHuffmancodebits(gfc, gi);
@@ -3329,7 +3277,6 @@ function BitStream() {
                     }
                     data_bits += huffman_coder_count1(gfc, gi);
                     /* does bitcount in quantize.c agree with actual bit count? */
-                    assert(data_bits == gi.part2_3_length + gi.part2_length);
                     tot_bits += data_bits;
                 }
                 /* for ch */
@@ -3341,7 +3288,6 @@ function BitStream() {
             for (ch = 0; ch < gfc.channels_out; ch++) {
                 var gi = l3_side.tt[gr][ch];
                 var i, sfb_partition, scale_bits = 0;
-                assert(gi.sfb_partition_table != null);
                 data_bits = 0;
                 sfb = 0;
                 sfb_partition = 0;
@@ -3374,8 +3320,6 @@ function BitStream() {
                 }
                 data_bits += huffman_coder_count1(gfc, gi);
                 /* does bitcount in quantize.c agree with actual bit count? */
-                assert(data_bits == gi.part2_3_length);
-                assert(scale_bits == gi.part2_length);
                 tot_bits += scale_bits + data_bits;
             }
             /* for ch */
@@ -3465,7 +3409,6 @@ function BitStream() {
         drain_into_ancillary(gfp, flushbits);
 
         /* check that the 100% of the last frame has been written to bitstream */
-        assert(gfc.header[last_ptr].write_timing + this.getframebits(gfp) == totbit);
 
         /*
          * we have padded out all frames with ancillary data, which is the same
@@ -3477,7 +3420,6 @@ function BitStream() {
         /* save the ReplayGain value */
         if (gfc.findReplayGain) {
             var RadioGain = ga.GetTitleGain(gfc.rgdata);
-            assert(NEQ(RadioGain, GainAnalysis.GAIN_NOT_ENOUGH_SAMPLES));
             gfc.RadioGain = Math.floor(RadioGain * 10.0 + 0.5) | 0;
             /* round to nearest */
         }
@@ -3580,7 +3522,6 @@ function BitStream() {
             gfc.ResvSize = l3_side.main_data_begin * 8;
         }
         //;
-        assert(totbit % 8 == 0);
 
         if (totbit > 1000000000) {
             /*
@@ -3669,7 +3610,6 @@ function BitStream() {
                          * this should not be possible, and indicates we have
                          * overflown the pcm_buf buffer
                          */
-                        assert(samples_out <= 1152);
 
                         if (gfc.findPeakSample) {
                             for (i = 0; i < samples_out; i++) {
@@ -3900,7 +3840,6 @@ function VBRTag() {
     this.addVbrFrame = function (gfp) {
         var gfc = gfp.internal_flags;
         var kbps = Tables.bitrate_table[gfp.version][gfc.bitrate_index];
-        assert(gfc.VBR_seek_table.bag != null);
         addVbr(gfc.VBR_seek_table, kbps);
     }
 
@@ -5664,8 +5603,6 @@ function CBRNewIterationLoop(_quantize)  {
 				}
 
 				this.quantize.iteration_finish_one(gfc, gr, ch);
-				assert (cod_info.part2_3_length <= LameInternalFlags.MAX_BITS_PER_CHANNEL);
-				assert (cod_info.part2_3_length <= targ_bits[ch]);
 			} /* for ch */
 		} /* for gr */
 
@@ -5752,12 +5689,10 @@ function QuantizePVT() {
     };
 
     function POW20(x) {
-        assert(0 <= (x + QuantizePVT.Q_MAX2) && x < QuantizePVT.Q_MAX);
         return pow20[x + QuantizePVT.Q_MAX2];
     }
 
     this.IPOW20 = function (x) {
-        assert(0 <= x && x < QuantizePVT.Q_MAX);
         return ipow20[x];
     }
 
@@ -6167,15 +6102,12 @@ function QuantizePVT() {
                 targ_bits[ch] /= bits;
                 sum += targ_bits[ch];
             }
-            assert(sum <= LameInternalFlags.MAX_BITS_PER_GRANULE);
         }
 
         return max_bits;
     }
 
     this.reduce_side = function (targ_bits, ms_ener_ratio, mean_bits, max_bits) {
-        assert(max_bits <= LameInternalFlags.MAX_BITS_PER_GRANULE);
-        assert(targ_bits[0] + targ_bits[1] <= LameInternalFlags.MAX_BITS_PER_GRANULE);
 
         /*
          * ms_ener_ratio = 0: allocate 66/33 mid/side fac=.33 ms_ener_ratio =.5:
@@ -6218,9 +6150,6 @@ function QuantizePVT() {
             targ_bits[0] = (max_bits * targ_bits[0]) / move_bits;
             targ_bits[1] = (max_bits * targ_bits[1]) / move_bits;
         }
-        assert(targ_bits[0] <= LameInternalFlags.MAX_BITS_PER_CHANNEL);
-        assert(targ_bits[1] <= LameInternalFlags.MAX_BITS_PER_CHANNEL);
-        assert(targ_bits[0] + targ_bits[1] <= LameInternalFlags.MAX_BITS_PER_GRANULE);
     };
 
     /**
@@ -6622,7 +6551,6 @@ function QuantizePVT() {
 
             if (sfb < Encoder.SBPSY_l) {
                 /* scfsi should be decoded by caller side */
-                assert(scalefac[sfb] >= 0);
                 gfc.pinfo.LAMEsfb[gr][ch][sfb] -= ifqstep * scalefac[sfb];
             }
         }
@@ -6919,14 +6847,12 @@ function Quantize() {
         var sum = 0;
         var upper = 0 | cod_info.max_nonzero_coeff;
 
-        assert(xrpow != null);
         cod_info.xrpow_max = 0;
 
         /*
          * check if there is some energy we have to quantize and calculate xrpow
          * matching our fresh scalefactors
          */
-        assert(0 <= upper && upper <= 575);
 
         Arrays.fill(xrpow, upper, 576, 0);
 
@@ -7141,7 +7067,6 @@ function Quantize() {
         cod_info.global_gain = start;
         desired_rate -= cod_info.part2_length;
 
-        assert(CurrentStep != 0);
         for (; ;) {
             var step;
             nBits = tk.count_bits(gfc, xrpow, cod_info, null);
@@ -7180,8 +7105,6 @@ function Quantize() {
             }
         }
 
-        assert(cod_info.global_gain >= 0);
-        assert(cod_info.global_gain < 256);
 
         while (nBits > desired_rate && cod_info.global_gain < 255) {
             cod_info.global_gain++;
@@ -7555,7 +7478,6 @@ function Quantize() {
                 var amp;
                 var width = cod_info.width[sfb];
                 var s = scalefac[sfb];
-                assert(s >= 0);
                 s = s - (4 >> cod_info.scalefac_scale);
                 if (s >= 0) {
                     scalefac[sfb] = s;
@@ -7848,7 +7770,6 @@ function Quantize() {
             }
         }
 
-        assert((cod_info.global_gain + cod_info.scalefac_scale) <= 255);
         /*
          * finish up
          */
@@ -7909,16 +7830,12 @@ function Quantize() {
         var dbits, over, found = 0;
         var sfb21_extra = gfc.sfb21_extra;
 
-        assert(Max_bits <= LameInternalFlags.MAX_BITS_PER_CHANNEL);
         Arrays.fill(bst_cod_info.l3_enc, 0);
 
         /*
          * search within round about 40 bits of optimal
          */
         do {
-            assert(this_bits >= min_bits);
-            assert(this_bits <= max_bits);
-            assert(min_bits <= max_bits);
 
             if (this_bits > Max_bits - 42)
                 gfc.sfb21_extra = false;
@@ -7980,7 +7897,6 @@ function Quantize() {
         if (found == 2) {
             System.arraycopy(bst_cod_info.l3_enc, 0, cod_info.l3_enc, 0, 576);
         }
-        assert(cod_info.part2_3_length <= Max_bits);
     }
 
     /**
@@ -9706,8 +9622,6 @@ function Encoder() {
      */
     function updateStats(gfc) {
         var gr, ch;
-        assert(0 <= gfc.bitrate_index && gfc.bitrate_index < 16);
-        assert(0 <= gfc.mode_ext && gfc.mode_ext < 4);
 
         /* count bitrate indices */
         gfc.bitrate_stereoMode_Hist[gfc.bitrate_index][4]++;
@@ -9763,11 +9677,8 @@ function Encoder() {
             newMDCT.mdct_sub48(gfc, primebuff0, primebuff1);
 
             /* check FFT will not use a negative starting offset */
-            assert(576 >= Encoder.FFTOFFSET);
             /* check if we have enough data for FFT */
-            assert(gfc.mf_size >= (Encoder.BLKSIZE + gfp.framesize - Encoder.FFTOFFSET));
             /* check if we have enough data for polyphase filterbank */
-            assert(gfc.mf_size >= (512 + gfp.framesize - 32));
         }
 
     }
@@ -10142,6 +10053,23 @@ function VBRSeekInfo() {
 
 
 
+function IIISideInfo() {
+    this.tt = [[null, null], [null, null]];
+    this.main_data_begin = 0;
+    this.private_bits = 0;
+    this.resvDrain_pre = 0;
+    this.resvDrain_post = 0;
+    this.scfsi = [new_int(4), new_int(4)];
+
+    for (var gr = 0; gr < 2; gr++) {
+        for (var ch = 0; ch < 2; ch++) {
+            this.tt[gr][ch] = new GrInfo();
+        }
+    }
+}
+
+
+
 //package mp3;
 
 /**
@@ -10162,23 +10090,6 @@ function NsPsy() {
      */
     this.attackthre = 0.;
     this.attackthre_s = 0.;
-}
-
-
-
-function IIISideInfo() {
-    this.tt = [[null, null], [null, null]];
-    this.main_data_begin = 0;
-    this.private_bits = 0;
-    this.resvDrain_pre = 0;
-    this.resvDrain_post = 0;
-    this.scfsi = [new_int(4), new_int(4)];
-
-    for (var gr = 0; gr < 2; gr++) {
-        for (var ch = 0; ch < 2; ch++) {
-            this.tt[gr][ch] = new GrInfo();
-        }
-    }
 }
 
 
@@ -11193,8 +11104,6 @@ function PsyModel() {
         }
 
         /* Should always be true, just checking */
-        assert(m1 >= 0);
-        assert(m2 >= 0);
 
         m1 += m2;
         //if (((long)(b + 3) & 0xffffffff) <= 3 + 3) {
@@ -11225,7 +11134,6 @@ function PsyModel() {
         } else {
             m2 = gfc.ATH.cb_l[kk] * gfc.ATH.adjust;
         }
-        assert(m2 >= 0);
         if (m1 < ma_max_m * m2) {
             /* 3% of the total */
             /* Originally if (m > 0) { */
@@ -11383,7 +11291,6 @@ function PsyModel() {
                 var f = thmLR * msfix2 / (thmM + thmS);
                 thmM *= f;
                 thmS *= f;
-                assert(thmM + thmS > 0);
             }
             gfc.thm[2].l[sb] = Math.min(thmM, gfc.thm[2].l[sb]);
             gfc.thm[3].l[sb] = Math.min(thmS, gfc.thm[3].l[sb]);
@@ -11403,7 +11310,6 @@ function PsyModel() {
                     var f = thmLR * msfix / (thmM + thmS);
                     thmM *= f;
                     thmS *= f;
-                    assert(thmM + thmS > 0);
                 }
                 gfc.thm[2].s[sb][sblock] = Math.min(gfc.thm[2].s[sb][sblock],
                     thmM);
@@ -11428,9 +11334,7 @@ function PsyModel() {
             var npart_s = gfc.npart_s;
             var b_lim = bo_s_sb < npart_s ? bo_s_sb : npart_s;
             while (b < b_lim) {
-                assert(eb[b] >= 0);
                 // iff failed, it may indicate some index error elsewhere
-                assert(thr[b] >= 0);
                 enn += eb[b];
                 thmm += thr[b];
                 b++;
@@ -11442,9 +11346,7 @@ function PsyModel() {
                 ++sb;
                 break;
             }
-            assert(eb[b] >= 0);
             // iff failed, it may indicate some index error elsewhere
-            assert(thr[b] >= 0);
             {
                 /* at transition sfb . sfb+1 */
                 var w_curr = gfc.PSY.bo_s_weight[sb];
@@ -11476,9 +11378,7 @@ function PsyModel() {
             var npart_l = gfc.npart_l;
             var b_lim = bo_l_sb < npart_l ? bo_l_sb : npart_l;
             while (b < b_lim) {
-                assert(eb[b] >= 0);
                 // iff failed, it may indicate some index error elsewhere
-                assert(thr[b] >= 0);
                 enn += eb[b];
                 thmm += thr[b];
                 b++;
@@ -11490,8 +11390,6 @@ function PsyModel() {
                 ++sb;
                 break;
             }
-            assert(eb[b] >= 0);
-            assert(thr[b] >= 0);
             {
                 /* at transition sfb . sfb+1 */
                 var w_curr = gfc.PSY.bo_l_weight[sb];
@@ -11526,8 +11424,6 @@ function PsyModel() {
             }
             eb[b] = ebb;
         }
-        assert(b == gfc.npart_s);
-        assert(j == 129);
         for (j = b = 0; b < gfc.npart_s; b++) {
             var kk = gfc.s3ind_s[b][0];
             var ecb = gfc.s3_ss[j++] * eb[kk];
@@ -11551,7 +11447,6 @@ function PsyModel() {
 
             gfc.nb_s2[chn][b] = gfc.nb_s1[chn][b];
             gfc.nb_s1[chn][b] = ecb;
-            assert(thr[b] >= 0);
         }
         for (; b <= Encoder.CBANDS; ++b) {
             eb[b] = 0;
@@ -11583,7 +11478,6 @@ function PsyModel() {
 
             if (uselongblock[chn] != 0) {
                 /* no attack : use long blocks */
-                assert(gfc.blocktype_old[chn] != Encoder.START_TYPE);
                 if (gfc.blocktype_old[chn] == Encoder.SHORT_TYPE)
                     blocktype[chn] = Encoder.STOP_TYPE;
             } else {
@@ -11632,7 +11526,6 @@ function PsyModel() {
         for (var sb = 0; sb < Encoder.SBMAX_s - 1; sb++) {
             for (var sblock = 0; sblock < 3; sblock++) {
                 var thm = mr.thm.s[sb][sblock];
-                assert(sb < regcoef_s.length);
                 if (thm > 0.0) {
                     var x = thm * masking_lower;
                     var en = mr.en.s[sb][sblock];
@@ -11640,7 +11533,6 @@ function PsyModel() {
                         if (en > x * 1e10) {
                             pe_s += regcoef_s[sb] * (10.0 * LOG10);
                         } else {
-                            assert(x > 0);
                             pe_s += regcoef_s[sb] * Util.FAST_LOG10(en / x);
                         }
                     }
@@ -11664,7 +11556,6 @@ function PsyModel() {
         var pe_l = 1124.23 / 4;
         for (var sb = 0; sb < Encoder.SBMAX_l - 1; sb++) {
             var thm = mr.thm.l[sb];
-            assert(sb < regcoef_l.length);
             if (thm > 0.0) {
                 var x = thm * masking_lower;
                 var en = mr.en.l[sb];
@@ -11672,7 +11563,6 @@ function PsyModel() {
                     if (en > x * 1e10) {
                         pe_l += regcoef_l[sb] * (10.0 * LOG10);
                     } else {
-                        assert(x > 0);
                         pe_l += regcoef_l[sb] * Util.FAST_LOG10(en / x);
                     }
                 }
@@ -11689,7 +11579,6 @@ function PsyModel() {
             var i;
             for (i = 0; i < gfc.numlines_l[b]; ++i, ++j) {
                 var el = fftenergy[j];
-                assert(el >= 0);
                 ebb += el;
                 if (m < el)
                     m = el;
@@ -11697,11 +11586,6 @@ function PsyModel() {
             eb[b] = ebb;
             max[b] = m;
             avg[b] = ebb * gfc.rnumlines_l[b];
-            assert(gfc.rnumlines_l[b] >= 0);
-            assert(ebb >= 0);
-            assert(eb[b] >= 0);
-            assert(max[b] >= 0);
-            assert(avg[b] >= 0);
         }
     }
 
@@ -11709,12 +11593,10 @@ function PsyModel() {
         var last_tab_entry = tab.length - 1;
         var b = 0;
         var a = avg[b] + avg[b + 1];
-        assert(a >= 0);
         if (a > 0.0) {
             var m = max[b];
             if (m < max[b + 1])
                 m = max[b + 1];
-            assert((gfc.numlines_l[b] + gfc.numlines_l[b + 1] - 1) > 0);
             a = 20.0 * (m * 2.0 - a)
                 / (a * (gfc.numlines_l[b] + gfc.numlines_l[b + 1] - 1));
             var k = 0 | a;
@@ -11727,15 +11609,12 @@ function PsyModel() {
 
         for (b = 1; b < gfc.npart_l - 1; b++) {
             a = avg[b - 1] + avg[b] + avg[b + 1];
-            assert(a >= 0);
             if (a > 0.0) {
                 var m = max[b - 1];
                 if (m < max[b])
                     m = max[b];
                 if (m < max[b + 1])
                     m = max[b + 1];
-                assert((gfc.numlines_l[b - 1] + gfc.numlines_l[b]
-                    + gfc.numlines_l[b + 1] - 1) > 0);
                 a = 20.0
                     * (m * 3.0 - a)
                     / (a * (gfc.numlines_l[b - 1] + gfc.numlines_l[b]
@@ -11748,16 +11627,12 @@ function PsyModel() {
                 mask_idx[b] = 0;
             }
         }
-        assert(b > 0);
-        assert(b == gfc.npart_l - 1);
 
         a = avg[b - 1] + avg[b];
-        assert(a >= 0);
         if (a > 0.0) {
             var m = max[b - 1];
             if (m < max[b])
                 m = max[b];
-            assert((gfc.numlines_l[b - 1] + gfc.numlines_l[b] - 1) > 0);
             a = 20.0 * (m * 2.0 - a)
                 / (a * (gfc.numlines_l[b - 1] + gfc.numlines_l[b] - 1));
             var k = 0 | a;
@@ -11767,7 +11642,6 @@ function PsyModel() {
         } else {
             mask_idx[b] = 0;
         }
-        assert(b == (gfc.npart_l - 1));
     }
 
     var fircoef = [
@@ -11831,7 +11705,6 @@ function PsyModel() {
             /* apply high pass filter of fs/4 */
             var firbuf = buffer[chn];
             var firbufPos = bufPos + 576 - 350 - NSFIRLEN + 192;
-            assert(fircoef.length == ((NSFIRLEN - 1) / 2));
             for (i = 0; i < 576; i++) {
                 var sum1, sum2;
                 sum1 = firbuf[firbufPos + i + 10];
@@ -11874,8 +11747,6 @@ function PsyModel() {
              * I increase the array dimensions by one and initialize the
              * accessed values to zero
              */
-            assert(gfc.npart_s <= Encoder.CBANDS);
-            assert(gfc.npart_l <= Encoder.CBANDS);
 
             /***************************************************************
              * determine the block type (window type)
@@ -11883,7 +11754,6 @@ function PsyModel() {
             /* calculate energies of each sub-shortblocks */
             for (i = 0; i < 3; i++) {
                 en_subshort[i] = gfc.nsPsy.last_en_subshort[chn][i + 6];
-                assert(gfc.nsPsy.last_en_subshort[chn][i + 4] > 0);
                 attack_intensity[i] = en_subshort[i]
                     / gfc.nsPsy.last_en_subshort[chn][i + 4];
                 en_short[0] += en_subshort[i];
@@ -11911,10 +11781,8 @@ function PsyModel() {
                     gfc.nsPsy.last_en_subshort[chn][i] = en_subshort[i + 3] = p;
                     en_short[1 + i / 3] += p;
                     if (p > en_subshort[i + 3 - 2]) {
-                        assert(en_subshort[i + 3 - 2] > 0);
                         p = p / en_subshort[i + 3 - 2];
                     } else if (en_subshort[i + 3 - 2] > p * 10.0) {
-                        assert(p > 0);
                         p = en_subshort[i + 3 - 2] / (p * 10.0);
                     } else
                         p = 0.0;
@@ -11946,10 +11814,8 @@ function PsyModel() {
             for (i = 1; i < 4; i++) {
                 var ratio;
                 if (en_short[i - 1] > en_short[i]) {
-                    assert(en_short[i] > 0);
                     ratio = en_short[i - 1] / en_short[i];
                 } else {
-                    assert(en_short[i - 1] > 0);
                     ratio = en_short[i] / en_short[i - 1];
                 }
                 if (ratio < 1.7) {
@@ -12267,7 +12133,6 @@ function PsyModel() {
             /* apply high pass filter of fs/4 */
             firbuf = buffer[chn];
             var firbufPos = bufPos + 576 - 350 - NSFIRLEN + 192;
-            assert(fircoef_.length == ((NSFIRLEN - 1) / 2));
             for (var i = 0; i < 576; i++) {
                 var sum1, sum2;
                 sum1 = firbuf[firbufPos + i + 10];
@@ -12315,7 +12180,6 @@ function PsyModel() {
             /* calculate energies of each sub-shortblocks */
             for (var i = 0; i < 3; i++) {
                 en_subshort[i] = gfc.nsPsy.last_en_subshort[chn][i + 6];
-                assert(gfc.nsPsy.last_en_subshort[chn][i + 4] > 0);
                 attack_intensity[i] = en_subshort[i]
                     / gfc.nsPsy.last_en_subshort[chn][i + 4];
                 en_short[0] += en_subshort[i];
@@ -12331,10 +12195,8 @@ function PsyModel() {
                 gfc.nsPsy.last_en_subshort[chn][i] = en_subshort[i + 3] = p;
                 en_short[1 + i / 3] += p;
                 if (p > en_subshort[i + 3 - 2]) {
-                    assert(en_subshort[i + 3 - 2] > 0);
                     p = p / en_subshort[i + 3 - 2];
                 } else if (en_subshort[i + 3 - 2] > p * 10.0) {
-                    assert(p > 0);
                     p = en_subshort[i + 3 - 2] / (p * 10.0);
                 } else {
                     p = 0.0;
@@ -12456,12 +12318,10 @@ function PsyModel() {
         var last_tab_entry = tab.length - 1;
         var b = 0;
         var a = avg[b] + avg[b + 1];
-        assert(a >= 0);
         if (a > 0.0) {
             var m = max[b];
             if (m < max[b + 1])
                 m = max[b + 1];
-            assert((gfc.numlines_s[b] + gfc.numlines_s[b + 1] - 1) > 0);
             a = 20.0 * (m * 2.0 - a)
                 / (a * (gfc.numlines_s[b] + gfc.numlines_s[b + 1] - 1));
             var k = 0 | a;
@@ -12474,16 +12334,12 @@ function PsyModel() {
 
         for (b = 1; b < gfc.npart_s - 1; b++) {
             a = avg[b - 1] + avg[b] + avg[b + 1];
-            assert(b + 1 < gfc.npart_s);
-            assert(a >= 0);
             if (a > 0.0) {
                 var m = max[b - 1];
                 if (m < max[b])
                     m = max[b];
                 if (m < max[b + 1])
                     m = max[b + 1];
-                assert((gfc.numlines_s[b - 1] + gfc.numlines_s[b]
-                    + gfc.numlines_s[b + 1] - 1) > 0);
                 a = 20.0
                     * (m * 3.0 - a)
                     / (a * (gfc.numlines_s[b - 1] + gfc.numlines_s[b]
@@ -12496,16 +12352,12 @@ function PsyModel() {
                 mask_idx[b] = 0;
             }
         }
-        assert(b > 0);
-        assert(b == gfc.npart_s - 1);
 
         a = avg[b - 1] + avg[b];
-        assert(a >= 0);
         if (a > 0.0) {
             var m = max[b - 1];
             if (m < max[b])
                 m = max[b];
-            assert((gfc.numlines_s[b - 1] + gfc.numlines_s[b] - 1) > 0);
             a = 20.0 * (m * 2.0 - a)
                 / (a * (gfc.numlines_s[b - 1] + gfc.numlines_s[b] - 1));
             var k = 0 | a;
@@ -12515,7 +12367,6 @@ function PsyModel() {
         } else {
             mask_idx[b] = 0;
         }
-        assert(b == (gfc.npart_s - 1));
     }
 
     function vbrpsy_compute_masking_s(gfp, fftenergy_s, eb, thr, chn, sblock) {
@@ -12534,14 +12385,9 @@ function PsyModel() {
                     m = el;
             }
             eb[b] = ebb;
-            assert(ebb >= 0);
             max[b] = m;
-            assert(n > 0);
             avg[b] = ebb / n;
-            assert(avg[b] >= 0);
         }
-        assert(b == gfc.npart_s);
-        assert(j == 129);
         for (; b < Encoder.CBANDS; ++b) {
             max[b] = 0;
             avg[b] = 0;
@@ -12595,7 +12441,6 @@ function PsyModel() {
                 thr[b] *= gfc.masking_lower;
             }
 
-            assert(thr[b] >= 0);
         }
         for (; b < Encoder.CBANDS; ++b) {
             eb[b] = 0;
@@ -12717,7 +12562,6 @@ function PsyModel() {
             if (gfc.masking_lower < 1) {
                 thr[b] *= gfc.masking_lower;
             }
-            assert(thr[b] >= 0);
         }
         for (; b < Encoder.CBANDS; ++b) {
             eb_l[b] = 0;
@@ -12759,7 +12603,6 @@ function PsyModel() {
 
             if (uselongblock[chn] != 0) {
                 /* no attack : use long blocks */
-                assert(gfc.blocktype_old[chn] != Encoder.START_TYPE);
                 if (gfc.blocktype_old[chn] == Encoder.SHORT_TYPE)
                     blocktype = Encoder.STOP_TYPE;
             } else {
@@ -12819,7 +12662,6 @@ function PsyModel() {
                     var f = thmLR * msfix2 / thmMS;
                     thmM *= f;
                     thmS *= f;
-                    assert(thmMS > 0);
                 }
                 rmid = Math.min(thmM, rmid);
                 rside = Math.min(thmS, rside);
@@ -13167,7 +13009,6 @@ function PsyModel() {
             ni = i + 1;
 
             while (j < j2) {
-                assert(j < Encoder.HBLKSIZE);
                 partition[j++] = i;
             }
             if (j > blksize / 2) {
@@ -13176,7 +13017,6 @@ function PsyModel() {
                 break;
             }
         }
-        assert(i < Encoder.CBANDS);
         b_frq[i] = sfreq * j;
 
         for (var sfb = 0; sfb < sbmax; sfb++) {
@@ -13383,7 +13223,6 @@ function PsyModel() {
             bval_width, gfc.mld_l, gfc.PSY.bo_l_weight, sfreq,
             Encoder.BLKSIZE, gfc.scalefac_band.l, Encoder.BLKSIZE
             / (2.0 * 576), Encoder.SBMAX_l);
-        assert(gfc.npart_l < Encoder.CBANDS);
         /* compute the spreading function */
         for (i = 0; i < gfc.npart_l; i++) {
             var snr = snr_l_a;
@@ -13452,7 +13291,6 @@ function PsyModel() {
             bval_width, gfc.mld_s, gfc.PSY.bo_s_weight, sfreq,
             Encoder.BLKSIZE_s, gfc.scalefac_band.s, Encoder.BLKSIZE_s
             / (2.0 * 192), Encoder.SBMAX_s);
-        assert(gfc.npart_s < Encoder.CBANDS);
 
         /* SNR formula. short block is normalized by SNR. is it still right ? */
         j = 0;
@@ -13544,8 +13382,6 @@ function PsyModel() {
         gfc.ATH.adjustLimit = 1.0;
         /* on lead, allow adjust up to maximum */
 
-        assert(gfc.bo_l[Encoder.SBMAX_l - 1] <= gfc.npart_l);
-        assert(gfc.bo_s[Encoder.SBMAX_s - 1] <= gfc.npart_s);
 
         if (gfp.ATHtype != -1) {
             /* compute equal loudness weights (eql_w) */
@@ -13572,13 +13408,11 @@ function PsyModel() {
                     ++j;
                 }
             }
-            assert(j == 129);
             for (var b = j = 0; b < gfc.npart_l; ++b) {
                 for (i = 0; i < gfc.numlines_l[b]; ++i) {
                     ++j;
                 }
             }
-            assert(j == 513);
         }
         j = 0;
         for (i = 0; i < gfc.npart_l; i++) {
@@ -14773,8 +14607,6 @@ function Lame() {
             if (gfp.ATHtype == -1)
                 gfp.ATHtype = 4;
         }
-        assert(gfp.VBR_q <= 9);
-        assert(gfp.VBR_q >= 0);
 
         switch (gfp.VBR) {
 
@@ -14880,7 +14712,6 @@ function Lame() {
                 break;
             }
         }
-        assert(gfp.scale >= 0);
         /* initialize default values common for all modes */
 
         if (gfp.VBR != VbrMode.vbr_off) { /* choose a min/max bitrate for VBR */
@@ -14932,7 +14763,6 @@ function Lame() {
 
         /* initialize internal qval settings */
         lame_init_qval(gfp);
-        assert(gfp.scale >= 0);
         /*
          * automatic ATH adjustment on
          */
@@ -14981,7 +14811,6 @@ function Lame() {
         if (gfp.internal_flags.nsPsy.attackthre_s < 0)
             gfp.internal_flags.nsPsy.attackthre_s = PsyModel.NSATTACKTHRE_S;
 
-        assert(gfp.scale >= 0);
 
         if (gfp.scale < 0)
             gfp.scale = 1;
@@ -15017,7 +14846,6 @@ function Lame() {
 
         qupvt.iteration_init(gfp);
         psy.psymodel_init(gfp);
-        assert(gfp.scale >= 0);
         return 0;
     }
 
@@ -15170,7 +14998,6 @@ function Lame() {
          * amount needed for FFT
          */
         mf_needed = Math.max(mf_needed, 512 + gfp.framesize - 32);
-        assert(LameInternalFlags.MFSIZE >= mf_needed);
 
         return mf_needed;
     }
@@ -15271,7 +15098,6 @@ function Lame() {
 
             /* update mfbuf[] counters */
             gfc.mf_size += n_out;
-            assert(gfc.mf_size <= LameInternalFlags.MFSIZE);
 
             /*
              * lame_encode_flush may have set gfc.mf_sample_to_encode to 0 so we
@@ -15312,7 +15138,6 @@ function Lame() {
                         mfbuf[ch][i] = mfbuf[ch][i + gfp.framesize];
             }
         }
-        assert(nsamples == 0);
 
         return mp3size;
     }
@@ -15439,7 +15264,6 @@ function Mp3Encoder(channels, samplerate, kbps) {
     gfp.write_id3tag_automatic = false;
 
     var retcode = lame.lame_init_params(gfp);
-    assert(0 == retcode);
     var maxSamples = 1152;
     var mp3buf_size = 0 | (1.25 * maxSamples + 7200);
     var mp3buf = new_byte(mp3buf_size);
@@ -15448,7 +15272,6 @@ function Mp3Encoder(channels, samplerate, kbps) {
         if (channels == 1) {
             right = left;
         }
-        assert(left.length == right.length);
         if (left.length > maxSamples) {
             maxSamples = left.length;
             mp3buf_size = 0 | (1.25 * maxSamples + 7200);
@@ -15567,8 +15390,6 @@ function testStereo44100() {
     var samples2 = new Int16Array(sampleBuf2, w2.dataOffset, w2.dataLen / 2);
     var remaining1 = samples1.length;
     var remaining2 = samples2.length;
-    assert(remaining1 == remaining2);
-    assert(w1.sampleRate == w2.sampleRate);
 
     var lameEnc = new Mp3Encoder(2, w1.sampleRate, 128);
     var maxSamples = 1152;
@@ -15594,5 +15415,12 @@ function testStereo44100() {
     console.log('done in ' + time + 'msec');
 }
 
+//testStereo44100();
+//testFullLength();
+L3Side.SFBMAX = (Encoder.SBMAX_s * 3);
+//testFullLength();
 this.Mp3Encoder = Mp3Encoder;
+this.WavHeader = WavHeader;
 }
+//fs=require('fs');
+//lamejs();
