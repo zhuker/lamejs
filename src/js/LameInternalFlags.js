@@ -12,6 +12,7 @@ var new_float = common.new_float;
 var new_float_n = common.new_float_n;
 var new_int = common.new_int;
 var new_int_n = common.new_int_n;
+var assert = common.assert;
 
 var IIISideInfo = require('./IIISideInfo.js');
 var ScaleFac = require('./ScaleFac.js');

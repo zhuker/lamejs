@@ -42,6 +42,7 @@ var new_float = common.new_float;
 var new_float_n = common.new_float_n;
 var new_int = common.new_int;
 var new_int_n = common.new_int_n;
+var assert = common.assert;
 
 var Encoder = require('./Encoder.js');
 
@@ -513,9 +514,9 @@ function NewMDCT() {
 
 	/**
 	 * new IDCT routine written by Takehiro TOMINAGA
-	 * 
+	 *
 	 * PURPOSE: Overlapping window on PCM samples<BR>
-	 * 
+	 *
 	 * SEMANTICS:<BR>
 	 * 32 16-bit pcm samples are scaled to fractional 2's complement and
 	 * concatenated to the end of the window buffer #x#. The updated window
@@ -920,7 +921,7 @@ function NewMDCT() {
 	 * short length. This leads to 12 coefficents in the time and 6 in the
 	 * frequency domain. In this case the results are stored side by side in the
 	 * vector out[].
-	 * 
+	 *
 	 * New layer3
 	 */
 	function mdct_short(inout, inoutPos) {

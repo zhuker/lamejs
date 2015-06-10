@@ -1,6 +1,7 @@
 var common = require('./common.js');
 var new_float = common.new_float;
 var new_int = common.new_int;
+var assert = common.assert;
 
 function CalcNoiseData() {
     this.global_gain = 0;

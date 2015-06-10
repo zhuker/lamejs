@@ -1,6 +1,5 @@
 require('use-strict');
 
-assert = console.assert;
 fs = require('fs');
 var common = require('./common.js');
 var System = common.System;
@@ -16,6 +15,7 @@ var new_float = common.new_float;
 var new_float_n = common.new_float_n;
 var new_int = common.new_int;
 var new_int_n = common.new_int_n;
+var assert = common.assert;
 
 Lame = require('./Lame.js');
 Presets = require('./Presets.js');
@@ -53,11 +53,7 @@ function Parse() {
     }
 }
 
-function BRHist() {
-    console.log("TODO: BRHist");
-}
 function MPGLib() {
-    console.log("TODO: MPGLib");
 }
 
 function ID3Tag() {
@@ -70,7 +66,13 @@ function ID3Tag() {
     }
 }
 
-function LameEncoder(channels, samplerate, kbps) {
+function Mp3Encoder(channels, samplerate, kbps) {
+    if (arguments.length != 3) {
+        console.error('WARN: Mp3Encoder(channels, samplerate, kbps) not specified');
+        channels = 1;
+        samplerate = 44100;
+        kbps = 128;
+    }
     var lame = new Lame();
     var gaud = new GetAudio();
     var ga = new GainAnalysis();
@@ -111,16 +113,29 @@ function LameEncoder(channels, samplerate, kbps) {
 
     var retcode = lame.lame_init_params(gfp);
     assert(0 == retcode);
+    var maxSamples = 1152;
+    var mp3buf_size = 0 | (1.25 * maxSamples + 7200);
+    var mp3buf = new_byte(mp3buf_size);
 
-    this.encodeBuffer = function (left, right, nsamples, mp3buf, mp3bufPos, mp3buf_size) {
-        var _sz = lame.lame_encode_buffer(gfp, left, right, nsamples, mp3buf, mp3bufPos, mp3buf_size);
-        return _sz;
-    }
+    this.encodeBuffer = function (left, right) {
+        if (channels == 1) {
+            right = left;
+        }
+        assert(left.length == right.length);
+        if (left.length > maxSamples) {
+            maxSamples = left.length;
+            mp3buf_size = 0 | (1.25 * maxSamples + 7200);
+            mp3buf = new_byte(mp3buf_size);
+        }
 
-    this.flush = function (mp3buf, mp3bufPos, mp3buf_size) {
-        var _sz = lame.lame_encode_flush(gfp, mp3buf, mp3bufPos, mp3buf_size);
-        return _sz;
-    }
+        var _sz = lame.lame_encode_buffer(gfp, left, right, left.length, mp3buf, 0, mp3buf_size);
+        return mp3buf.subarray(0, _sz);
+    };
+
+    this.flush = function () {
+        var _sz = lame.lame_encode_flush(gfp, mp3buf, 0, mp3buf_size);
+        return mp3buf.subarray(0, _sz);
+    };
 }
 
 function WavHeader() {
@@ -129,9 +144,11 @@ function WavHeader() {
     this.channels = 0;
     this.sampleRate = 0;
 }
+
 function fourccToInt(fourcc) {
     return fourcc.charCodeAt(0) << 24 | fourcc.charCodeAt(1) << 16 | fourcc.charCodeAt(2) << 8 | fourcc.charCodeAt(3);
 }
+
 WavHeader.RIFF = fourccToInt("RIFF");
 WavHeader.WAVE = fourccToInt("WAVE");
 WavHeader.fmt_ = fourccToInt("fmt ");
@@ -177,8 +194,7 @@ WavHeader.readHeader = function (dataView) {
     w.dataLen = len;
     w.dataOffset = pos + 8;
     return w;
-}
-;
+};
 
 function testFullLength() {
     var r = fs.readFileSync("testdata/IMG_0373.wav");
@@ -186,11 +202,8 @@ function testFullLength() {
     var w = WavHeader.readHeader(new DataView(sampleBuf));
     var samples = new Int16Array(sampleBuf, w.dataOffset, w.dataLen / 2);
     var remaining = samples.length;
-    var lameEnc = new LameEncoder(w.channels, w.sampleRate, 128);
+    var lameEnc = new Mp3Encoder(); //w.channels, w.sampleRate, 128);
     var maxSamples = 1152;
-    var mp3buf_size = 0 | (1.25 * maxSamples + 7200);
-    var mp3buf = new_byte(mp3buf_size);
-    var mp3bufPos = 0;
 
     var fd = fs.openSync("testjs2.mp3", "w");
     var time = new Date().getTime();
@@ -198,16 +211,16 @@ function testFullLength() {
         var left = samples.subarray(i, i + maxSamples);
         var right = samples.subarray(i, i + maxSamples);
 
-        var _sz = lameEnc.encodeBuffer(left, right, maxSamples, mp3buf, mp3bufPos, mp3buf_size);
-        if (_sz > 0) {
-            var _buf = new Buffer(mp3buf, 0, _sz);
-            fs.writeSync(fd, _buf, 0, _sz);
+        var mp3buf = lameEnc.encodeBuffer(left, right);
+        if (mp3buf.length > 0) {
+            fs.writeSync(fd, new Buffer(mp3buf), 0, mp3buf.length);
         }
         remaining -= maxSamples;
-
     }
-    var _sz = lameEnc.flush(mp3buf, mp3bufPos, mp3buf_size);
-    fs.writeSync(fd, new Buffer(mp3buf, 0, _sz), 0, _sz);
+    var mp3buf = lameEnc.flush();
+    if (mp3buf.length > 0) {
+        fs.writeSync(fd, new Buffer(mp3buf), 0, mp3buf.length);
+    }
     fs.closeSync(fd);
     time = new Date().getTime() - time;
     console.log('done in ' + time + 'msec');
@@ -230,30 +243,29 @@ function testStereo44100() {
     assert(remaining1 == remaining2);
     assert(w1.sampleRate == w2.sampleRate);
 
-    var lameEnc = new LameEncoder(2, w1.sampleRate, 128);
+    var lameEnc = new Mp3Encoder(2, w1.sampleRate, 128);
     var maxSamples = 1152;
-    var mp3buf_size = 0 | (1.25 * maxSamples + 7200);
-    var mp3buf = new_byte(mp3buf_size);
-    var mp3bufPos = 0;
 
     var time = new Date().getTime();
     for (var i = 0; remaining1 >= maxSamples; i += maxSamples) {
         var left = samples1.subarray(i, i + maxSamples);
         var right = samples2.subarray(i, i + maxSamples);
 
-        var _sz = lameEnc.encodeBuffer(left, right, maxSamples, mp3buf, mp3bufPos, mp3buf_size);
-        if (_sz > 0) {
-            var _buf = new Buffer(mp3buf, 0, _sz);
-            fs.writeSync(fd, _buf, 0, _sz);
+        var mp3buf = lameEnc.encodeBuffer(left, right);
+        if (mp3buf.length > 0) {
+            fs.writeSync(fd, new Buffer(mp3buf), 0, mp3buf.length);
         }
         remaining1 -= maxSamples;
 
     }
-    var _sz = lameEnc.flush(mp3buf, mp3bufPos, mp3buf_size);
-    fs.writeSync(fd, new Buffer(mp3buf, 0, _sz), 0, _sz);
+    var mp3buf = lameEnc.flush();
+    if (mp3buf.length > 0) {
+        fs.writeSync(fd, new Buffer(mp3buf), 0, mp3buf.length);
+    }
     fs.closeSync(fd);
     time = new Date().getTime() - time;
     console.log('done in ' + time + 'msec');
 }
 
-testStereo44100();
+//testStereo44100();
+testFullLength();

@@ -13,6 +13,8 @@ var new_float_n = common.new_float_n;
 var new_int = common.new_int;
 var new_int_n = common.new_int_n;
 var new_short_n = common.new_short_n;
+var assert = common.assert;
+
 var PsyModel = require('./PsyModel.js');
 var LameGlobalFlags = require('./LameGlobalFlags.js');
 var LameInternalFlags = require('./LameInternalFlags.js');

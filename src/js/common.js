@@ -136,6 +136,9 @@ VbrMode.vbr_abr = new VbrMode(3);
 VbrMode.vbr_mtrh = new VbrMode(4);
 VbrMode.vbr_default = VbrMode.vbr_mtrh;
 
+var assert = function (x) {
+    console.assert(x);
+};
 
 module.exports = {
     "System": System,
@@ -152,5 +155,6 @@ module.exports = {
     "new_int": new_int,
     "new_int_n": new_int_n,
     "new_short": new_short,
-    "new_short_n": new_short_n
+    "new_short_n": new_short_n,
+    "assert": assert
 };
