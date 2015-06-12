@@ -61,7 +61,7 @@ sampleBlockSize = 1152; //can be anything but make it a multiple of 576 to make 
 for (var i = 0; i < samples.length; i += sampleBlockSize) {
   leftChunk = left.subarray(i, i + sampleBlockSize);
   rightChunk = right.subarray(i, i + sampleBlockSize);
-  var mp3buf = mp3encoder.encoderBuffer(leftChunk, rightChunk);
+  var mp3buf = mp3encoder.encodeBuffer(leftChunk, rightChunk);
   if (mp3buf.length > 0) {
     //TODO: write your mp3 here
   }
