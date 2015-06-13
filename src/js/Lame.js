@@ -1677,6 +1677,11 @@ function Lame() {
         this.n_out = 0;
     }
 
+
+    function NumUsed() {
+        this.num_used = 0;
+    }
+
     function fill_buffer(gfp, mfbuf, in_buffer, in_bufferPos, nsamples, io) {
         var gfc = gfp.internal_flags;
 
