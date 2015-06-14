@@ -15575,7 +15575,7 @@ function testStereo44100() {
 }
 
 //testStereo44100();
-testFullLength();
+//testFullLength();
 L3Side.SFBMAX = (Encoder.SBMAX_s * 3);
 //testFullLength();
 this.Mp3Encoder = Mp3Encoder;
