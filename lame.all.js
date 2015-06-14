@@ -1266,6 +1266,2765 @@ function GainAnalysis() {
 
 }
 
+
+
+BitStream.EQ = function (a, b) {
+    return (Math.abs(a) > Math.abs(b)) ? (Math.abs((a) - (b)) <= (Math
+        .abs(a) * 1e-6))
+        : (Math.abs((a) - (b)) <= (Math.abs(b) * 1e-6));
+};
+
+BitStream.NEQ = function (a, b) {
+    return !BitStream.EQ(a, b);
+};
+
+function BitStream() {
+    var self = this;
+    var CRC16_POLYNOMIAL = 0x8005;
+
+    /*
+     * we work with ints, so when doing bit manipulation, we limit ourselves to
+     * MAX_LENGTH-2 just to be on the safe side
+     */
+    var MAX_LENGTH = 32;
+
+    //GainAnalysis ga;
+    //MPGLib mpg;
+    //Version ver;
+    //VBRTag vbr;
+    var ga = null;
+    var mpg = null;
+    var ver = null;
+    var vbr = null;
+
+    //public final void setModules(GainAnalysis ga, MPGLib mpg, Version ver,
+    //	VBRTag vbr) {
+
+    this.setModules = function (_ga, _mpg, _ver, _vbr) {
+        ga = _ga;
+        mpg = _mpg;
+        ver = _ver;
+        vbr = _vbr;
+    };
+
+    /**
+     * Bit stream buffer.
+     */
+    //private byte[] buf;
+    var buf = null;
+    /**
+     * Bit counter of bit stream.
+     */
+    var totbit = 0;
+    /**
+     * Pointer to top byte in buffer.
+     */
+    var bufByteIdx = 0;
+    /**
+     * Pointer to top bit of top byte in buffer.
+     */
+    var bufBitIdx = 0;
+
+    /**
+     * compute bitsperframe and mean_bits for a layer III frame
+     */
+    this.getframebits = function (gfp) {
+        var gfc = gfp.internal_flags;
+        var bit_rate;
+
+        /* get bitrate in kbps [?] */
+        if (gfc.bitrate_index != 0)
+            bit_rate = Tables.bitrate_table[gfp.version][gfc.bitrate_index];
+        else
+            bit_rate = gfp.brate;
+
+        /* main encoding routine toggles padding on and off */
+        /* one Layer3 Slot consists of 8 bits */
+        var bytes = 0 | (gfp.version + 1) * 72000 * bit_rate / gfp.out_samplerate + gfc.padding;
+        return 8 * bytes;
+    };
+
+    function putheader_bits(gfc) {
+        System.arraycopy(gfc.header[gfc.w_ptr].buf, 0, buf, bufByteIdx, gfc.sideinfo_len);
+        bufByteIdx += gfc.sideinfo_len;
+        totbit += gfc.sideinfo_len * 8;
+        gfc.w_ptr = (gfc.w_ptr + 1) & (LameInternalFlags.MAX_HEADER_BUF - 1);
+    }
+
+    /**
+     * write j bits into the bit stream
+     */
+    function putbits2(gfc, val, j) {
+
+        while (j > 0) {
+            var k;
+            if (bufBitIdx == 0) {
+                bufBitIdx = 8;
+                bufByteIdx++;
+                if (gfc.header[gfc.w_ptr].write_timing == totbit) {
+                    putheader_bits(gfc);
+                }
+                buf[bufByteIdx] = 0;
+            }
+
+            k = Math.min(j, bufBitIdx);
+            j -= k;
+
+            bufBitIdx -= k;
+
+            /* 32 too large on 32 bit machines */
+
+            buf[bufByteIdx] |= ((val >> j) << bufBitIdx);
+            totbit += k;
+        }
+    }
+
+    /**
+     * write j bits into the bit stream, ignoring frame headers
+     */
+    function putbits_noheaders(gfc, val, j) {
+
+        while (j > 0) {
+            var k;
+            if (bufBitIdx == 0) {
+                bufBitIdx = 8;
+                bufByteIdx++;
+                buf[bufByteIdx] = 0;
+            }
+
+            k = Math.min(j, bufBitIdx);
+            j -= k;
+
+            bufBitIdx -= k;
+
+            /* 32 too large on 32 bit machines */
+
+            buf[bufByteIdx] |= ((val >> j) << bufBitIdx);
+            totbit += k;
+        }
+    }
+
+    /**
+     * Some combinations of bitrate, Fs, and stereo make it impossible to stuff
+     * out a frame using just main_data, due to the limited number of bits to
+     * indicate main_data_length. In these situations, we put stuffing bits into
+     * the ancillary data...
+     */
+    function drain_into_ancillary(gfp, remainingBits) {
+        var gfc = gfp.internal_flags;
+        var i;
+
+        if (remainingBits >= 8) {
+            putbits2(gfc, 0x4c, 8);
+            remainingBits -= 8;
+        }
+        if (remainingBits >= 8) {
+            putbits2(gfc, 0x41, 8);
+            remainingBits -= 8;
+        }
+        if (remainingBits >= 8) {
+            putbits2(gfc, 0x4d, 8);
+            remainingBits -= 8;
+        }
+        if (remainingBits >= 8) {
+            putbits2(gfc, 0x45, 8);
+            remainingBits -= 8;
+        }
+
+        if (remainingBits >= 32) {
+            var version = ver.getLameShortVersion();
+            if (remainingBits >= 32)
+                for (i = 0; i < version.length && remainingBits >= 8; ++i) {
+                    remainingBits -= 8;
+                    putbits2(gfc, version.charAt(i), 8);
+                }
+        }
+
+        for (; remainingBits >= 1; remainingBits -= 1) {
+            putbits2(gfc, gfc.ancillary_flag, 1);
+            gfc.ancillary_flag ^= (!gfp.disable_reservoir ? 1 : 0);
+        }
+
+
+    }
+
+    /**
+     * write N bits into the header
+     */
+    function writeheader(gfc, val, j) {
+        var ptr = gfc.header[gfc.h_ptr].ptr;
+
+        while (j > 0) {
+            var k = Math.min(j, 8 - (ptr & 7));
+            j -= k;
+            /* >> 32 too large for 32 bit machines */
+
+            gfc.header[gfc.h_ptr].buf[ptr >> 3] |= ((val >> j)) << (8 - (ptr & 7) - k);
+            ptr += k;
+        }
+        gfc.header[gfc.h_ptr].ptr = ptr;
+    }
+
+    function CRC_update(value, crc) {
+        value <<= 8;
+        for (var i = 0; i < 8; i++) {
+            value <<= 1;
+            crc <<= 1;
+
+            if ((((crc ^ value) & 0x10000) != 0))
+                crc ^= CRC16_POLYNOMIAL;
+        }
+        return crc;
+    }
+
+    this.CRC_writeheader = function (gfc, header) {
+        var crc = 0xffff;
+        /* (jo) init crc16 for error_protection */
+
+        crc = CRC_update(header[2] & 0xff, crc);
+        crc = CRC_update(header[3] & 0xff, crc);
+        for (var i = 6; i < gfc.sideinfo_len; i++) {
+            crc = CRC_update(header[i] & 0xff, crc);
+        }
+
+        header[4] = (byte)(crc >> 8);
+        header[5] = (byte)(crc & 255);
+    };
+
+    function encodeSideInfo2(gfp, bitsPerFrame) {
+        var gfc = gfp.internal_flags;
+        var l3_side;
+        var gr, ch;
+
+        l3_side = gfc.l3_side;
+        gfc.header[gfc.h_ptr].ptr = 0;
+        Arrays.fill(gfc.header[gfc.h_ptr].buf, 0, gfc.sideinfo_len, 0);
+        if (gfp.out_samplerate < 16000)
+            writeheader(gfc, 0xffe, 12);
+        else
+            writeheader(gfc, 0xfff, 12);
+        writeheader(gfc, (gfp.version), 1);
+        writeheader(gfc, 4 - 3, 2);
+        writeheader(gfc, (!gfp.error_protection ? 1 : 0), 1);
+        writeheader(gfc, (gfc.bitrate_index), 4);
+        writeheader(gfc, (gfc.samplerate_index), 2);
+        writeheader(gfc, (gfc.padding), 1);
+        writeheader(gfc, (gfp.extension), 1);
+        writeheader(gfc, (gfp.mode.ordinal()), 2);
+        writeheader(gfc, (gfc.mode_ext), 2);
+        writeheader(gfc, (gfp.copyright), 1);
+        writeheader(gfc, (gfp.original), 1);
+        writeheader(gfc, (gfp.emphasis), 2);
+        if (gfp.error_protection) {
+            writeheader(gfc, 0, 16);
+            /* dummy */
+        }
+
+        if (gfp.version == 1) {
+            /* MPEG1 */
+            writeheader(gfc, (l3_side.main_data_begin), 9);
+
+            if (gfc.channels_out == 2)
+                writeheader(gfc, l3_side.private_bits, 3);
+            else
+                writeheader(gfc, l3_side.private_bits, 5);
+
+            for (ch = 0; ch < gfc.channels_out; ch++) {
+                var band;
+                for (band = 0; band < 4; band++) {
+                    writeheader(gfc, l3_side.scfsi[ch][band], 1);
+                }
+            }
+
+            for (gr = 0; gr < 2; gr++) {
+                for (ch = 0; ch < gfc.channels_out; ch++) {
+                    var gi = l3_side.tt[gr][ch];
+                    writeheader(gfc, gi.part2_3_length + gi.part2_length, 12);
+                    writeheader(gfc, gi.big_values / 2, 9);
+                    writeheader(gfc, gi.global_gain, 8);
+                    writeheader(gfc, gi.scalefac_compress, 4);
+
+                    if (gi.block_type != Encoder.NORM_TYPE) {
+                        writeheader(gfc, 1, 1);
+                        /* window_switching_flag */
+                        writeheader(gfc, gi.block_type, 2);
+                        writeheader(gfc, gi.mixed_block_flag, 1);
+
+                        if (gi.table_select[0] == 14)
+                            gi.table_select[0] = 16;
+                        writeheader(gfc, gi.table_select[0], 5);
+                        if (gi.table_select[1] == 14)
+                            gi.table_select[1] = 16;
+                        writeheader(gfc, gi.table_select[1], 5);
+
+                        writeheader(gfc, gi.subblock_gain[0], 3);
+                        writeheader(gfc, gi.subblock_gain[1], 3);
+                        writeheader(gfc, gi.subblock_gain[2], 3);
+                    } else {
+                        writeheader(gfc, 0, 1);
+                        /* window_switching_flag */
+                        if (gi.table_select[0] == 14)
+                            gi.table_select[0] = 16;
+                        writeheader(gfc, gi.table_select[0], 5);
+                        if (gi.table_select[1] == 14)
+                            gi.table_select[1] = 16;
+                        writeheader(gfc, gi.table_select[1], 5);
+                        if (gi.table_select[2] == 14)
+                            gi.table_select[2] = 16;
+                        writeheader(gfc, gi.table_select[2], 5);
+
+                        writeheader(gfc, gi.region0_count, 4);
+                        writeheader(gfc, gi.region1_count, 3);
+                    }
+                    writeheader(gfc, gi.preflag, 1);
+                    writeheader(gfc, gi.scalefac_scale, 1);
+                    writeheader(gfc, gi.count1table_select, 1);
+                }
+            }
+        } else {
+            /* MPEG2 */
+            writeheader(gfc, (l3_side.main_data_begin), 8);
+            writeheader(gfc, l3_side.private_bits, gfc.channels_out);
+
+            gr = 0;
+            for (ch = 0; ch < gfc.channels_out; ch++) {
+                var gi = l3_side.tt[gr][ch];
+                writeheader(gfc, gi.part2_3_length + gi.part2_length, 12);
+                writeheader(gfc, gi.big_values / 2, 9);
+                writeheader(gfc, gi.global_gain, 8);
+                writeheader(gfc, gi.scalefac_compress, 9);
+
+                if (gi.block_type != Encoder.NORM_TYPE) {
+                    writeheader(gfc, 1, 1);
+                    /* window_switching_flag */
+                    writeheader(gfc, gi.block_type, 2);
+                    writeheader(gfc, gi.mixed_block_flag, 1);
+
+                    if (gi.table_select[0] == 14)
+                        gi.table_select[0] = 16;
+                    writeheader(gfc, gi.table_select[0], 5);
+                    if (gi.table_select[1] == 14)
+                        gi.table_select[1] = 16;
+                    writeheader(gfc, gi.table_select[1], 5);
+
+                    writeheader(gfc, gi.subblock_gain[0], 3);
+                    writeheader(gfc, gi.subblock_gain[1], 3);
+                    writeheader(gfc, gi.subblock_gain[2], 3);
+                } else {
+                    writeheader(gfc, 0, 1);
+                    /* window_switching_flag */
+                    if (gi.table_select[0] == 14)
+                        gi.table_select[0] = 16;
+                    writeheader(gfc, gi.table_select[0], 5);
+                    if (gi.table_select[1] == 14)
+                        gi.table_select[1] = 16;
+                    writeheader(gfc, gi.table_select[1], 5);
+                    if (gi.table_select[2] == 14)
+                        gi.table_select[2] = 16;
+                    writeheader(gfc, gi.table_select[2], 5);
+
+                    writeheader(gfc, gi.region0_count, 4);
+                    writeheader(gfc, gi.region1_count, 3);
+                }
+
+                writeheader(gfc, gi.scalefac_scale, 1);
+                writeheader(gfc, gi.count1table_select, 1);
+            }
+        }
+
+        if (gfp.error_protection) {
+            /* (jo) error_protection: add crc16 information to header */
+            CRC_writeheader(gfc, gfc.header[gfc.h_ptr].buf);
+        }
+
+        {
+            var old = gfc.h_ptr;
+
+            gfc.h_ptr = (old + 1) & (LameInternalFlags.MAX_HEADER_BUF - 1);
+            gfc.header[gfc.h_ptr].write_timing = gfc.header[old].write_timing
+                + bitsPerFrame;
+
+            if (gfc.h_ptr == gfc.w_ptr) {
+                /* yikes! we are out of header buffer space */
+                System.err
+                    .println("Error: MAX_HEADER_BUF too small in bitstream.c \n");
+            }
+
+        }
+    }
+
+    function huffman_coder_count1(gfc, gi) {
+        /* Write count1 area */
+        var h = Tables.ht[gi.count1table_select + 32];
+        var i, bits = 0;
+
+        var ix = gi.big_values;
+        var xr = gi.big_values;
+
+        for (i = (gi.count1 - gi.big_values) / 4; i > 0; --i) {
+            var huffbits = 0;
+            var p = 0, v;
+
+            v = gi.l3_enc[ix + 0];
+            if (v != 0) {
+                p += 8;
+                if (gi.xr[xr + 0] < 0)
+                    huffbits++;
+            }
+
+            v = gi.l3_enc[ix + 1];
+            if (v != 0) {
+                p += 4;
+                huffbits *= 2;
+                if (gi.xr[xr + 1] < 0)
+                    huffbits++;
+            }
+
+            v = gi.l3_enc[ix + 2];
+            if (v != 0) {
+                p += 2;
+                huffbits *= 2;
+                if (gi.xr[xr + 2] < 0)
+                    huffbits++;
+            }
+
+            v = gi.l3_enc[ix + 3];
+            if (v != 0) {
+                p++;
+                huffbits *= 2;
+                if (gi.xr[xr + 3] < 0)
+                    huffbits++;
+            }
+
+            ix += 4;
+            xr += 4;
+            putbits2(gfc, huffbits + h.table[p], h.hlen[p]);
+            bits += h.hlen[p];
+        }
+        return bits;
+    }
+
+    /**
+     * Implements the pseudocode of page 98 of the IS
+     */
+    function Huffmancode(gfc, tableindex, start, end, gi) {
+        var h = Tables.ht[tableindex];
+        var bits = 0;
+
+        if (0 == tableindex)
+            return bits;
+
+        for (var i = start; i < end; i += 2) {
+            var cbits = 0;
+            var xbits = 0;
+            var linbits = h.xlen;
+            var xlen = h.xlen;
+            var ext = 0;
+            var x1 = gi.l3_enc[i];
+            var x2 = gi.l3_enc[i + 1];
+
+            if (x1 != 0) {
+                if (gi.xr[i] < 0)
+                    ext++;
+                cbits--;
+            }
+
+            if (tableindex > 15) {
+                /* use ESC-words */
+                if (x1 > 14) {
+                    var linbits_x1 = x1 - 15;
+                    ext |= linbits_x1 << 1;
+                    xbits = linbits;
+                    x1 = 15;
+                }
+
+                if (x2 > 14) {
+                    var linbits_x2 = x2 - 15;
+                    ext <<= linbits;
+                    ext |= linbits_x2;
+                    xbits += linbits;
+                    x2 = 15;
+                }
+                xlen = 16;
+            }
+
+            if (x2 != 0) {
+                ext <<= 1;
+                if (gi.xr[i + 1] < 0)
+                    ext++;
+                cbits--;
+            }
+
+
+            x1 = x1 * xlen + x2;
+            xbits -= cbits;
+            cbits += h.hlen[x1];
+
+
+            putbits2(gfc, h.table[x1], cbits);
+            putbits2(gfc, ext, xbits);
+            bits += cbits + xbits;
+        }
+        return bits;
+    }
+
+    /**
+     * Note the discussion of huffmancodebits() on pages 28 and 29 of the IS, as
+     * well as the definitions of the side information on pages 26 and 27.
+     */
+    function ShortHuffmancodebits(gfc, gi) {
+        var region1Start = 3 * gfc.scalefac_band.s[3];
+        if (region1Start > gi.big_values)
+            region1Start = gi.big_values;
+
+        /* short blocks do not have a region2 */
+        var bits = Huffmancode(gfc, gi.table_select[0], 0, region1Start, gi);
+        bits += Huffmancode(gfc, gi.table_select[1], region1Start,
+            gi.big_values, gi);
+        return bits;
+    }
+
+    function LongHuffmancodebits(gfc, gi) {
+        var bigvalues, bits;
+        var region1Start, region2Start;
+
+        bigvalues = gi.big_values;
+
+        var i = gi.region0_count + 1;
+        region1Start = gfc.scalefac_band.l[i];
+        i += gi.region1_count + 1;
+        region2Start = gfc.scalefac_band.l[i];
+
+        if (region1Start > bigvalues)
+            region1Start = bigvalues;
+
+        if (region2Start > bigvalues)
+            region2Start = bigvalues;
+
+        bits = Huffmancode(gfc, gi.table_select[0], 0, region1Start, gi);
+        bits += Huffmancode(gfc, gi.table_select[1], region1Start,
+            region2Start, gi);
+        bits += Huffmancode(gfc, gi.table_select[2], region2Start, bigvalues,
+            gi);
+        return bits;
+    }
+
+    function writeMainData(gfp) {
+        var gr, ch, sfb, data_bits, tot_bits = 0;
+        var gfc = gfp.internal_flags;
+        var l3_side = gfc.l3_side;
+
+        if (gfp.version == 1) {
+            /* MPEG 1 */
+            for (gr = 0; gr < 2; gr++) {
+                for (ch = 0; ch < gfc.channels_out; ch++) {
+                    var gi = l3_side.tt[gr][ch];
+                    var slen1 = Takehiro.slen1_tab[gi.scalefac_compress];
+                    var slen2 = Takehiro.slen2_tab[gi.scalefac_compress];
+                    data_bits = 0;
+                    for (sfb = 0; sfb < gi.sfbdivide; sfb++) {
+                        if (gi.scalefac[sfb] == -1)
+                            continue;
+                        /* scfsi is used */
+                        putbits2(gfc, gi.scalefac[sfb], slen1);
+                        data_bits += slen1;
+                    }
+                    for (; sfb < gi.sfbmax; sfb++) {
+                        if (gi.scalefac[sfb] == -1)
+                            continue;
+                        /* scfsi is used */
+                        putbits2(gfc, gi.scalefac[sfb], slen2);
+                        data_bits += slen2;
+                    }
+
+                    if (gi.block_type == Encoder.SHORT_TYPE) {
+                        data_bits += ShortHuffmancodebits(gfc, gi);
+                    } else {
+                        data_bits += LongHuffmancodebits(gfc, gi);
+                    }
+                    data_bits += huffman_coder_count1(gfc, gi);
+                    /* does bitcount in quantize.c agree with actual bit count? */
+                    tot_bits += data_bits;
+                }
+                /* for ch */
+            }
+            /* for gr */
+        } else {
+            /* MPEG 2 */
+            gr = 0;
+            for (ch = 0; ch < gfc.channels_out; ch++) {
+                var gi = l3_side.tt[gr][ch];
+                var i, sfb_partition, scale_bits = 0;
+                data_bits = 0;
+                sfb = 0;
+                sfb_partition = 0;
+
+                if (gi.block_type == Encoder.SHORT_TYPE) {
+                    for (; sfb_partition < 4; sfb_partition++) {
+                        var sfbs = gi.sfb_partition_table[sfb_partition] / 3;
+                        var slen = gi.slen[sfb_partition];
+                        for (i = 0; i < sfbs; i++, sfb++) {
+                            putbits2(gfc,
+                                Math.max(gi.scalefac[sfb * 3 + 0], 0), slen);
+                            putbits2(gfc,
+                                Math.max(gi.scalefac[sfb * 3 + 1], 0), slen);
+                            putbits2(gfc,
+                                Math.max(gi.scalefac[sfb * 3 + 2], 0), slen);
+                            scale_bits += 3 * slen;
+                        }
+                    }
+                    data_bits += ShortHuffmancodebits(gfc, gi);
+                } else {
+                    for (; sfb_partition < 4; sfb_partition++) {
+                        var sfbs = gi.sfb_partition_table[sfb_partition];
+                        var slen = gi.slen[sfb_partition];
+                        for (i = 0; i < sfbs; i++, sfb++) {
+                            putbits2(gfc, Math.max(gi.scalefac[sfb], 0), slen);
+                            scale_bits += slen;
+                        }
+                    }
+                    data_bits += LongHuffmancodebits(gfc, gi);
+                }
+                data_bits += huffman_coder_count1(gfc, gi);
+                /* does bitcount in quantize.c agree with actual bit count? */
+                tot_bits += scale_bits + data_bits;
+            }
+            /* for ch */
+        }
+        /* for gf */
+        return tot_bits;
+    }
+
+    /* main_data */
+
+    function TotalBytes() {
+        this.total = 0;
+    }
+
+    /*
+     * compute the number of bits required to flush all mp3 frames currently in
+     * the buffer. This should be the same as the reservoir size. Only call this
+     * routine between frames - i.e. only after all headers and data have been
+     * added to the buffer by format_bitstream().
+     *
+     * Also compute total_bits_output = size of mp3 buffer (including frame
+     * headers which may not have yet been send to the mp3 buffer) + number of
+     * bits needed to flush all mp3 frames.
+     *
+     * total_bytes_output is the size of the mp3 output buffer if
+     * lame_encode_flush_nogap() was called right now.
+     */
+    function compute_flushbits(gfp, total_bytes_output) {
+        var gfc = gfp.internal_flags;
+        var flushbits, remaining_headers;
+        var bitsPerFrame;
+        var last_ptr, first_ptr;
+        first_ptr = gfc.w_ptr;
+        /* first header to add to bitstream */
+        last_ptr = gfc.h_ptr - 1;
+        /* last header to add to bitstream */
+        if (last_ptr == -1)
+            last_ptr = LameInternalFlags.MAX_HEADER_BUF - 1;
+
+        /* add this many bits to bitstream so we can flush all headers */
+        flushbits = gfc.header[last_ptr].write_timing - totbit;
+        total_bytes_output.total = flushbits;
+
+        if (flushbits >= 0) {
+            /* if flushbits >= 0, some headers have not yet been written */
+            /* reduce flushbits by the size of the headers */
+            remaining_headers = 1 + last_ptr - first_ptr;
+            if (last_ptr < first_ptr)
+                remaining_headers = 1 + last_ptr - first_ptr
+                    + LameInternalFlags.MAX_HEADER_BUF;
+            flushbits -= remaining_headers * 8 * gfc.sideinfo_len;
+        }
+
+        /*
+         * finally, add some bits so that the last frame is complete these bits
+         * are not necessary to decode the last frame, but some decoders will
+         * ignore last frame if these bits are missing
+         */
+        bitsPerFrame = self.getframebits(gfp);
+        flushbits += bitsPerFrame;
+        total_bytes_output.total += bitsPerFrame;
+        /* round up: */
+        if ((total_bytes_output.total % 8) != 0)
+            total_bytes_output.total = 1 + (total_bytes_output.total / 8);
+        else
+            total_bytes_output.total = (total_bytes_output.total / 8);
+        total_bytes_output.total += bufByteIdx + 1;
+
+        if (flushbits < 0) {
+            System.err.println("strange error flushing buffer ... \n");
+        }
+        return flushbits;
+    }
+
+    this.flush_bitstream = function (gfp) {
+        var gfc = gfp.internal_flags;
+        var l3_side;
+        var flushbits;
+        var last_ptr = gfc.h_ptr - 1;
+        /* last header to add to bitstream */
+        if (last_ptr == -1)
+            last_ptr = LameInternalFlags.MAX_HEADER_BUF - 1;
+        l3_side = gfc.l3_side;
+
+        if ((flushbits = compute_flushbits(gfp, new TotalBytes())) < 0)
+            return;
+        drain_into_ancillary(gfp, flushbits);
+
+        /* check that the 100% of the last frame has been written to bitstream */
+
+        /*
+         * we have padded out all frames with ancillary data, which is the same
+         * as filling the bitreservoir with ancillary data, so :
+         */
+        gfc.ResvSize = 0;
+        l3_side.main_data_begin = 0;
+
+        /* save the ReplayGain value */
+        if (gfc.findReplayGain) {
+            var RadioGain = ga.GetTitleGain(gfc.rgdata);
+            gfc.RadioGain = Math.floor(RadioGain * 10.0 + 0.5) | 0;
+            /* round to nearest */
+        }
+
+        /* find the gain and scale change required for no clipping */
+        if (gfc.findPeakSample) {
+            gfc.noclipGainChange = Math.ceil(Math
+                        .log10(gfc.PeakSample / 32767.0) * 20.0 * 10.0) | 0;
+            /* round up */
+
+            if (gfc.noclipGainChange > 0) {
+                /* clipping occurs */
+                if (EQ(gfp.scale, 1.0) || EQ(gfp.scale, 0.0))
+                    gfc.noclipScale = (Math
+                        .floor((32767.0 / gfc.PeakSample) * 100.0) / 100.0);
+                /* round down */
+                else {
+                    /*
+                     * the user specified his own scaling factor. We could
+                     * suggest the scaling factor of
+                     * (32767.0/gfp.PeakSample)*(gfp.scale) but it's usually
+                     * very inaccurate. So we'd rather not advice him on the
+                     * scaling factor.
+                     */
+                    gfc.noclipScale = -1;
+                }
+            } else
+            /* no clipping */
+                gfc.noclipScale = -1;
+        }
+    };
+
+    this.add_dummy_byte = function (gfp, val, n) {
+        var gfc = gfp.internal_flags;
+        var i;
+
+        while (n-- > 0) {
+            putbits_noheaders(gfc, val, 8);
+
+            for (i = 0; i < LameInternalFlags.MAX_HEADER_BUF; ++i)
+                gfc.header[i].write_timing += 8;
+        }
+    };
+
+    /**
+     * This is called after a frame of audio has been quantized and coded. It
+     * will write the encoded audio to the bitstream. Note that from a layer3
+     * encoder's perspective the bit stream is primarily a series of main_data()
+     * blocks, with header and side information inserted at the proper locations
+     * to maintain framing. (See Figure A.7 in the IS).
+     */
+    this.format_bitstream = function (gfp) {
+        var gfc = gfp.internal_flags;
+        var l3_side;
+        l3_side = gfc.l3_side;
+
+        var bitsPerFrame = this.getframebits(gfp);
+        drain_into_ancillary(gfp, l3_side.resvDrain_pre);
+
+        encodeSideInfo2(gfp, bitsPerFrame);
+        var bits = 8 * gfc.sideinfo_len;
+        bits += writeMainData(gfp);
+        drain_into_ancillary(gfp, l3_side.resvDrain_post);
+        bits += l3_side.resvDrain_post;
+
+        l3_side.main_data_begin += (bitsPerFrame - bits) / 8;
+
+        /*
+         * compare number of bits needed to clear all buffered mp3 frames with
+         * what we think the resvsize is:
+         */
+        if (compute_flushbits(gfp, new TotalBytes()) != gfc.ResvSize) {
+            System.err.println("Internal buffer inconsistency. flushbits <> ResvSize");
+        }
+
+        /*
+         * compare main_data_begin for the next frame with what we think the
+         * resvsize is:
+         */
+        if ((l3_side.main_data_begin * 8) != gfc.ResvSize) {
+            System.err.printf("bit reservoir error: \n"
+                + "l3_side.main_data_begin: %d \n"
+                + "Resvoir size:             %d \n"
+                + "resv drain (post)         %d \n"
+                + "resv drain (pre)          %d \n"
+                + "header and sideinfo:      %d \n"
+                + "data bits:                %d \n"
+                + "total bits:               %d (remainder: %d) \n"
+                + "bitsperframe:             %d \n",
+                8 * l3_side.main_data_begin, gfc.ResvSize,
+                l3_side.resvDrain_post, l3_side.resvDrain_pre,
+                8 * gfc.sideinfo_len, bits - l3_side.resvDrain_post - 8
+                * gfc.sideinfo_len, bits, bits % 8, bitsPerFrame);
+
+            System.err.println("This is a fatal error.  It has several possible causes:");
+            System.err.println("90%%  LAME compiled with buggy version of gcc using advanced optimizations");
+            System.err.println(" 9%%  Your system is overclocked");
+            System.err.println(" 1%%  bug in LAME encoding library");
+
+            gfc.ResvSize = l3_side.main_data_begin * 8;
+        }
+        //;
+
+        if (totbit > 1000000000) {
+            /*
+             * to avoid totbit overflow, (at 8h encoding at 128kbs) lets reset
+             * bit counter
+             */
+            var i;
+            for (i = 0; i < LameInternalFlags.MAX_HEADER_BUF; ++i)
+                gfc.header[i].write_timing -= totbit;
+            totbit = 0;
+        }
+
+        return 0;
+    };
+
+    /**
+     * <PRE>
+     * copy data out of the internal MP3 bit buffer into a user supplied
+     *       unsigned char buffer.
+     *
+     *       mp3data=0      indicates data in buffer is an id3tags and VBR tags
+     *       mp3data=1      data is real mp3 frame data.
+     * </PRE>
+     */
+    this.copy_buffer = function (gfc, buffer, bufferPos, size, mp3data) {
+        var minimum = bufByteIdx + 1;
+        if (minimum <= 0)
+            return 0;
+        if (size != 0 && minimum > size) {
+            /* buffer is too small */
+            return -1;
+        }
+        System.arraycopy(buf, 0, buffer, bufferPos, minimum);
+        bufByteIdx = -1;
+        bufBitIdx = 0;
+
+        if (mp3data != 0) {
+            var crc = new_int(1);
+            crc[0] = gfc.nMusicCRC;
+            vbr.updateMusicCRC(crc, buffer, bufferPos, minimum);
+            gfc.nMusicCRC = crc[0];
+
+            /**
+             * sum number of bytes belonging to the mp3 stream this info will be
+             * written into the Xing/LAME header for seeking
+             */
+            if (minimum > 0) {
+                gfc.VBR_seek_table.nBytesWritten += minimum;
+            }
+
+            if (gfc.decode_on_the_fly) { /* decode the frame */
+                var pcm_buf = new_float_n([2, 1152]);
+                var mp3_in = minimum;
+                var samples_out = -1;
+                var i;
+
+                /* re-synthesis to pcm. Repeat until we get a samples_out=0 */
+                while (samples_out != 0) {
+
+                    samples_out = mpg.hip_decode1_unclipped(gfc.hip, buffer,
+                        bufferPos, mp3_in, pcm_buf[0], pcm_buf[1]);
+                    /*
+                     * samples_out = 0: need more data to decode samples_out =
+                     * -1: error. Lets assume 0 pcm output samples_out = number
+                     * of samples output
+                     */
+
+                    /*
+                     * set the lenght of the mp3 input buffer to zero, so that
+                     * in the next iteration of the loop we will be querying
+                     * mpglib about buffered data
+                     */
+                    mp3_in = 0;
+
+                    if (samples_out == -1) {
+                        /*
+                         * error decoding. Not fatal, but might screw up the
+                         * ReplayGain tag. What should we do? Ignore for now
+                         */
+                        samples_out = 0;
+                    }
+                    if (samples_out > 0) {
+                        /* process the PCM data */
+
+                        /*
+                         * this should not be possible, and indicates we have
+                         * overflown the pcm_buf buffer
+                         */
+
+                        if (gfc.findPeakSample) {
+                            for (i = 0; i < samples_out; i++) {
+                                if (pcm_buf[0][i] > gfc.PeakSample)
+                                    gfc.PeakSample = pcm_buf[0][i];
+                                else if (-pcm_buf[0][i] > gfc.PeakSample)
+                                    gfc.PeakSample = -pcm_buf[0][i];
+                            }
+                            if (gfc.channels_out > 1)
+                                for (i = 0; i < samples_out; i++) {
+                                    if (pcm_buf[1][i] > gfc.PeakSample)
+                                        gfc.PeakSample = pcm_buf[1][i];
+                                    else if (-pcm_buf[1][i] > gfc.PeakSample)
+                                        gfc.PeakSample = -pcm_buf[1][i];
+                                }
+                        }
+
+                        if (gfc.findReplayGain)
+                            if (ga.AnalyzeSamples(gfc.rgdata, pcm_buf[0], 0,
+                                    pcm_buf[1], 0, samples_out,
+                                    gfc.channels_out) == GainAnalysis.GAIN_ANALYSIS_ERROR)
+                                return -6;
+
+                    }
+                    /* if (samples_out>0) */
+                }
+                /* while (samples_out!=0) */
+            }
+            /* if (gfc.decode_on_the_fly) */
+
+        }
+        /* if (mp3data) */
+        return minimum;
+    };
+
+    this.init_bit_stream_w = function (gfc) {
+        buf = new_byte(Lame.LAME_MAXMP3BUFFER);
+
+        gfc.h_ptr = gfc.w_ptr = 0;
+        gfc.header[gfc.h_ptr].write_timing = 0;
+        bufByteIdx = -1;
+        bufBitIdx = 0;
+        totbit = 0;
+    };
+
+    // From machine.h
+
+
+}
+
+/*
+ *      bit reservoir source file
+ *
+ *      Copyright (c) 1999-2000 Mark Taylor
+ *
+ * This library is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2 of the License, or (at your option) any later version.
+ *
+ * This library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Library General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with this library; if not, write to the
+ * Free Software Foundation, Inc., 59 Temple Place - Suite 330,
+ * Boston, MA 02111-1307, USA.
+ */
+
+/* $Id: Reservoir.java,v 1.9 2011/05/24 20:48:06 kenchis Exp $ */
+
+//package mp3;
+
+/**
+ * ResvFrameBegin:<BR>
+ * Called (repeatedly) at the beginning of a frame. Updates the maximum size of
+ * the reservoir, and checks to make sure main_data_begin was set properly by
+ * the formatter<BR>
+ * Background information:
+ * 
+ * This is the original text from the ISO standard. Because of sooo many bugs
+ * and irritations correcting comments are added in brackets []. A '^W' means
+ * you should remove the last word.
+ * 
+ * <PRE>
+ *  1. The following rule can be used to calculate the maximum
+ *     number of bits used for one granule [^W frame]:<BR>
+ *     At the highest possible bitrate of Layer III (320 kbps
+ *     per stereo signal [^W^W^W], 48 kHz) the frames must be of
+ *     [^W^W^W are designed to have] constant length, i.e.
+ *     one buffer [^W^W the frame] length is:<BR>
+ * 
+ *         320 kbps * 1152/48 kHz = 7680 bit = 960 byte
+ * 
+ *     This value is used as the maximum buffer per channel [^W^W] at
+ *     lower bitrates [than 320 kbps]. At 64 kbps mono or 128 kbps
+ *     stereo the main granule length is 64 kbps * 576/48 kHz = 768 bit
+ *     [per granule and channel] at 48 kHz sampling frequency.
+ *     This means that there is a maximum deviation (short time buffer
+ *     [= reservoir]) of 7680 - 2*2*768 = 4608 bits is allowed at 64 kbps.
+ *     The actual deviation is equal to the number of bytes [with the
+ *     meaning of octets] denoted by the main_data_end offset pointer.
+ *     The actual maximum deviation is (2^9-1)*8 bit = 4088 bits
+ *     [for MPEG-1 and (2^8-1)*8 bit for MPEG-2, both are hard limits].
+ *     ... The xchange of buffer bits between the left and right channel
+ *     is allowed without restrictions [exception: dual channel].
+ *     Because of the [constructed] constraint on the buffer size
+ *     main_data_end is always set to 0 in the case of bit_rate_index==14,
+ *     i.e. data rate 320 kbps per stereo signal [^W^W^W]. In this case
+ *     all data are allocated between adjacent header [^W sync] words
+ *     [, i.e. there is no buffering at all].
+ * </PRE>
+ */
+
+
+function Reservoir() {
+	var bs;
+
+	this.setModules  = function(_bs) {
+		bs = _bs;
+	}
+
+	this.ResvFrameBegin = function(gfp, mean_bits) {
+		var gfc = gfp.internal_flags;
+		var maxmp3buf;
+		var l3_side = gfc.l3_side;
+
+		var frameLength = bs.getframebits(gfp);
+		mean_bits.bits = (frameLength - gfc.sideinfo_len * 8) / gfc.mode_gr;
+
+		/**
+		 * <PRE>
+		 *  Meaning of the variables:
+		 *      resvLimit: (0, 8, ..., 8*255 (MPEG-2), 8*511 (MPEG-1))
+		 *          Number of bits can be stored in previous frame(s) due to
+		 *          counter size constaints
+		 *      maxmp3buf: ( ??? ... 8*1951 (MPEG-1 and 2), 8*2047 (MPEG-2.5))
+		 *          Number of bits allowed to encode one frame (you can take 8*511 bit
+		 *          from the bit reservoir and at most 8*1440 bit from the current
+		 *          frame (320 kbps, 32 kHz), so 8*1951 bit is the largest possible
+		 *          value for MPEG-1 and -2)
+		 * 
+		 *          maximum allowed granule/channel size times 4 = 8*2047 bits.,
+		 *          so this is the absolute maximum supported by the format.
+		 * 
+		 * 
+		 *      fullFrameBits:  maximum number of bits available for encoding
+		 *                      the current frame.
+		 * 
+		 *      mean_bits:      target number of bits per granule.
+		 * 
+		 *      frameLength:
+		 * 
+		 *      gfc.ResvMax:   maximum allowed reservoir
+		 * 
+		 *      gfc.ResvSize:  current reservoir size
+		 * 
+		 *      l3_side.resvDrain_pre:
+		 *         ancillary data to be added to previous frame:
+		 *         (only usefull in VBR modes if it is possible to have
+		 *         maxmp3buf < fullFrameBits)).  Currently disabled,
+		 *         see #define NEW_DRAIN
+		 *         2010-02-13: RH now enabled, it seems to be needed for CBR too,
+		 *                     as there exists one example, where the FhG decoder
+		 *                     can't decode a -b320 CBR file anymore.
+		 * 
+		 *      l3_side.resvDrain_post:
+		 *         ancillary data to be added to this frame:
+		 * 
+		 * </PRE>
+		 */
+
+		/* main_data_begin has 9 bits in MPEG-1, 8 bits MPEG-2 */
+		var resvLimit = (8 * 256) * gfc.mode_gr - 8;
+
+		/*
+		 * maximum allowed frame size. dont use more than this number of bits,
+		 * even if the frame has the space for them:
+		 */
+		if (gfp.brate > 320) {
+			/* in freeformat the buffer is constant */
+			maxmp3buf = 8 * ((int) ((gfp.brate * 1000)
+					/ (gfp.out_samplerate / 1152) / 8 + .5));
+		} else {
+			/*
+			 * all mp3 decoders should have enough buffer to handle this value:
+			 * size of a 320kbps 32kHz frame
+			 */
+			maxmp3buf = 8 * 1440;
+
+			/*
+			 * Bouvigne suggests this more lax interpretation of the ISO doc
+			 * instead of using 8*960.
+			 */
+
+			if (gfp.strict_ISO) {
+				maxmp3buf = 8 * ((int) (320000 / (gfp.out_samplerate / 1152) / 8 + .5));
+			}
+		}
+
+		gfc.ResvMax = maxmp3buf - frameLength;
+		if (gfc.ResvMax > resvLimit)
+			gfc.ResvMax = resvLimit;
+		if (gfc.ResvMax < 0 || gfp.disable_reservoir)
+			gfc.ResvMax = 0;
+
+		var fullFrameBits = mean_bits.bits * gfc.mode_gr
+				+ Math.min(gfc.ResvSize, gfc.ResvMax);
+
+		if (fullFrameBits > maxmp3buf)
+			fullFrameBits = maxmp3buf;
+
+
+		l3_side.resvDrain_pre = 0;
+
+		// frame analyzer code
+		if (gfc.pinfo != null) {
+			/*
+			 * expected bits per channel per granule [is this also right for
+			 * mono/stereo, MPEG-1/2 ?]
+			 */
+			gfc.pinfo.mean_bits = mean_bits.bits / 2;
+			gfc.pinfo.resvsize = gfc.ResvSize;
+		}
+
+		return fullFrameBits;
+	}
+
+	/**
+	 * returns targ_bits: target number of bits to use for 1 granule<BR>
+	 * extra_bits: amount extra available from reservoir<BR>
+	 * Mark Taylor 4/99
+	 */
+	this.ResvMaxBits = function(gfp, mean_bits, targ_bits, cbr) {
+		var gfc = gfp.internal_flags;
+		var add_bits;
+        var ResvSize = gfc.ResvSize, ResvMax = gfc.ResvMax;
+
+		/* compensate the saved bits used in the 1st granule */
+		if (cbr != 0)
+			ResvSize += mean_bits;
+
+		if ((gfc.substep_shaping & 1) != 0)
+			ResvMax *= 0.9;
+
+		targ_bits.bits = mean_bits;
+
+		/* extra bits if the reservoir is almost full */
+		if (ResvSize * 10 > ResvMax * 9) {
+			add_bits = ResvSize - (ResvMax * 9) / 10;
+			targ_bits.bits += add_bits;
+			gfc.substep_shaping |= 0x80;
+		} else {
+			add_bits = 0;
+			gfc.substep_shaping &= 0x7f;
+			/*
+			 * build up reservoir. this builds the reservoir a little slower
+			 * than FhG. It could simple be mean_bits/15, but this was rigged to
+			 * always produce 100 (the old value) at 128kbs
+			 */
+			if (!gfp.disable_reservoir && 0 == (gfc.substep_shaping & 1))
+				targ_bits.bits -= .1 * mean_bits;
+		}
+
+		/* amount from the reservoir we are allowed to use. ISO says 6/10 */
+		var extra_bits = (ResvSize < (gfc.ResvMax * 6) / 10 ? ResvSize
+				: (gfc.ResvMax * 6) / 10);
+		extra_bits -= add_bits;
+
+		if (extra_bits < 0)
+			extra_bits = 0;
+		return extra_bits;
+	}
+
+	/**
+	 * Called after a granule's bit allocation. Readjusts the size of the
+	 * reservoir to reflect the granule's usage.
+	 */
+	this.ResvAdjust = function(gfc, gi) {
+		gfc.ResvSize -= gi.part2_3_length + gi.part2_length;
+	}
+
+	/**
+	 * Called after all granules in a frame have been allocated. Makes sure that
+	 * the reservoir size is within limits, possibly by adding stuffing bits.
+	 */
+	this.ResvFrameEnd = function(gfc, mean_bits) {
+		var over_bits;
+		var l3_side = gfc.l3_side;
+
+		gfc.ResvSize += mean_bits * gfc.mode_gr;
+		var stuffingBits = 0;
+		l3_side.resvDrain_post = 0;
+		l3_side.resvDrain_pre = 0;
+
+		/* we must be byte aligned */
+		if ((over_bits = gfc.ResvSize % 8) != 0)
+			stuffingBits += over_bits;
+
+		over_bits = (gfc.ResvSize - stuffingBits) - gfc.ResvMax;
+		if (over_bits > 0) {
+			stuffingBits += over_bits;
+		}
+
+		/*
+		 * NOTE: enabling the NEW_DRAIN code fixes some problems with FhG
+		 * decoder shipped with MS Windows operating systems. Using this, it is
+		 * even possible to use Gabriel's lax buffer consideration again, which
+		 * assumes, any decoder should have a buffer large enough for a 320 kbps
+		 * frame at 32 kHz sample rate.
+		 * 
+		 * old drain code: lame -b320 BlackBird.wav --. does not play with
+		 * GraphEdit.exe using FhG decoder V1.5 Build 50
+		 * 
+		 * new drain code: lame -b320 BlackBird.wav --. plays fine with
+		 * GraphEdit.exe using FhG decoder V1.5 Build 50
+		 * 
+		 * Robert Hegemann, 2010-02-13.
+		 */
+		/*
+		 * drain as many bits as possible into previous frame ancillary data In
+		 * particular, in VBR mode ResvMax may have changed, and we have to make
+		 * sure main_data_begin does not create a reservoir bigger than ResvMax
+		 * mt 4/00
+		 */
+		{
+			var mdb_bytes = Math.min(l3_side.main_data_begin * 8, stuffingBits) / 8;
+			l3_side.resvDrain_pre += 8 * mdb_bytes;
+			stuffingBits -= 8 * mdb_bytes;
+			gfc.ResvSize -= 8 * mdb_bytes;
+			l3_side.main_data_begin -= mdb_bytes;
+		}
+		/* drain the rest into this frames ancillary data */
+		l3_side.resvDrain_post += stuffingBits;
+		gfc.ResvSize -= stuffingBits;
+	}
+}
+
+
+/**
+ * A Vbr header may be present in the ancillary data field of the first frame of
+ * an mp3 bitstream<BR>
+ * The Vbr header (optionally) contains
+ * <UL>
+ * <LI>frames total number of audio frames in the bitstream
+ * <LI>bytes total number of bytes in the bitstream
+ * <LI>toc table of contents
+ * </UL>
+ *
+ * toc (table of contents) gives seek points for random access.<BR>
+ * The ith entry determines the seek point for i-percent duration.<BR>
+ * seek point in bytes = (toc[i]/256.0) * total_bitstream_bytes<BR>
+ * e.g. half duration seek point = (toc[50]/256.0) * total_bitstream_bytes
+ */
+VBRTag.NUMTOCENTRIES = 100;
+VBRTag.MAXFRAMESIZE = 2880;
+
+function VBRTag() {
+
+    var lame;
+    var bs;
+    var v;
+
+    this.setModules = function (_lame, _bs, _v) {
+        lame = _lame;
+        bs = _bs;
+        v = _v;
+    };
+
+    var FRAMES_FLAG = 0x0001;
+    var BYTES_FLAG = 0x0002;
+    var TOC_FLAG = 0x0004;
+    var VBR_SCALE_FLAG = 0x0008;
+
+    var NUMTOCENTRIES = VBRTag.NUMTOCENTRIES;
+
+    /**
+     * (0xB40) the max freeformat 640 32kHz framesize.
+     */
+    var MAXFRAMESIZE = VBRTag.MAXFRAMESIZE;
+
+    /**
+     * <PRE>
+     *    4 bytes for Header Tag
+     *    4 bytes for Header Flags
+     *  100 bytes for entry (toc)
+     *    4 bytes for frame size
+     *    4 bytes for stream size
+     *    4 bytes for VBR scale. a VBR quality indicator: 0=best 100=worst
+     *   20 bytes for LAME tag.  for example, "LAME3.12 (beta 6)"
+     * ___________
+     *  140 bytes
+     * </PRE>
+     */
+    var VBRHEADERSIZE = (NUMTOCENTRIES + 4 + 4 + 4 + 4 + 4);
+
+    var LAMEHEADERSIZE = (VBRHEADERSIZE + 9 + 1 + 1 + 8
+    + 1 + 1 + 3 + 1 + 1 + 2 + 4 + 2 + 2);
+
+    /**
+     * The size of the Xing header MPEG-1, bit rate in kbps.
+     */
+    var XING_BITRATE1 = 128;
+    /**
+     * The size of the Xing header MPEG-2, bit rate in kbps.
+     */
+    var XING_BITRATE2 = 64;
+    /**
+     * The size of the Xing header MPEG-2.5, bit rate in kbps.
+     */
+    var XING_BITRATE25 = 32;
+
+    /**
+     * ISO-8859-1 charset for byte to string operations.
+     */
+    var ISO_8859_1 = null; //Charset.forName("ISO-8859-1");
+
+    /**
+     * VBR header magic string.
+     */
+    var VBRTag0 = "Xing";
+    /**
+     * VBR header magic string (VBR == VBRMode.vbr_off).
+     */
+    var VBRTag1 = "Info";
+
+    /**
+     * Lookup table for fast CRC-16 computation. Uses the polynomial
+     * x^16+x^15+x^2+1
+     */
+    var crc16Lookup = [0x0000, 0xC0C1, 0xC181, 0x0140,
+        0xC301, 0x03C0, 0x0280, 0xC241, 0xC601, 0x06C0, 0x0780, 0xC741,
+        0x0500, 0xC5C1, 0xC481, 0x0440, 0xCC01, 0x0CC0, 0x0D80, 0xCD41,
+        0x0F00, 0xCFC1, 0xCE81, 0x0E40, 0x0A00, 0xCAC1, 0xCB81, 0x0B40,
+        0xC901, 0x09C0, 0x0880, 0xC841, 0xD801, 0x18C0, 0x1980, 0xD941,
+        0x1B00, 0xDBC1, 0xDA81, 0x1A40, 0x1E00, 0xDEC1, 0xDF81, 0x1F40,
+        0xDD01, 0x1DC0, 0x1C80, 0xDC41, 0x1400, 0xD4C1, 0xD581, 0x1540,
+        0xD701, 0x17C0, 0x1680, 0xD641, 0xD201, 0x12C0, 0x1380, 0xD341,
+        0x1100, 0xD1C1, 0xD081, 0x1040, 0xF001, 0x30C0, 0x3180, 0xF141,
+        0x3300, 0xF3C1, 0xF281, 0x3240, 0x3600, 0xF6C1, 0xF781, 0x3740,
+        0xF501, 0x35C0, 0x3480, 0xF441, 0x3C00, 0xFCC1, 0xFD81, 0x3D40,
+        0xFF01, 0x3FC0, 0x3E80, 0xFE41, 0xFA01, 0x3AC0, 0x3B80, 0xFB41,
+        0x3900, 0xF9C1, 0xF881, 0x3840, 0x2800, 0xE8C1, 0xE981, 0x2940,
+        0xEB01, 0x2BC0, 0x2A80, 0xEA41, 0xEE01, 0x2EC0, 0x2F80, 0xEF41,
+        0x2D00, 0xEDC1, 0xEC81, 0x2C40, 0xE401, 0x24C0, 0x2580, 0xE541,
+        0x2700, 0xE7C1, 0xE681, 0x2640, 0x2200, 0xE2C1, 0xE381, 0x2340,
+        0xE101, 0x21C0, 0x2080, 0xE041, 0xA001, 0x60C0, 0x6180, 0xA141,
+        0x6300, 0xA3C1, 0xA281, 0x6240, 0x6600, 0xA6C1, 0xA781, 0x6740,
+        0xA501, 0x65C0, 0x6480, 0xA441, 0x6C00, 0xACC1, 0xAD81, 0x6D40,
+        0xAF01, 0x6FC0, 0x6E80, 0xAE41, 0xAA01, 0x6AC0, 0x6B80, 0xAB41,
+        0x6900, 0xA9C1, 0xA881, 0x6840, 0x7800, 0xB8C1, 0xB981, 0x7940,
+        0xBB01, 0x7BC0, 0x7A80, 0xBA41, 0xBE01, 0x7EC0, 0x7F80, 0xBF41,
+        0x7D00, 0xBDC1, 0xBC81, 0x7C40, 0xB401, 0x74C0, 0x7580, 0xB541,
+        0x7700, 0xB7C1, 0xB681, 0x7640, 0x7200, 0xB2C1, 0xB381, 0x7340,
+        0xB101, 0x71C0, 0x7080, 0xB041, 0x5000, 0x90C1, 0x9181, 0x5140,
+        0x9301, 0x53C0, 0x5280, 0x9241, 0x9601, 0x56C0, 0x5780, 0x9741,
+        0x5500, 0x95C1, 0x9481, 0x5440, 0x9C01, 0x5CC0, 0x5D80, 0x9D41,
+        0x5F00, 0x9FC1, 0x9E81, 0x5E40, 0x5A00, 0x9AC1, 0x9B81, 0x5B40,
+        0x9901, 0x59C0, 0x5880, 0x9841, 0x8801, 0x48C0, 0x4980, 0x8941,
+        0x4B00, 0x8BC1, 0x8A81, 0x4A40, 0x4E00, 0x8EC1, 0x8F81, 0x4F40,
+        0x8D01, 0x4DC0, 0x4C80, 0x8C41, 0x4400, 0x84C1, 0x8581, 0x4540,
+        0x8701, 0x47C0, 0x4680, 0x8641, 0x8201, 0x42C0, 0x4380, 0x8341,
+        0x4100, 0x81C1, 0x8081, 0x4040];
+
+    /***********************************************************************
+     * Robert Hegemann 2001-01-17
+     ***********************************************************************/
+
+    function addVbr(v, bitrate) {
+        v.nVbrNumFrames++;
+        v.sum += bitrate;
+        v.seen++;
+
+        if (v.seen < v.want) {
+            return;
+        }
+
+        if (v.pos < v.size) {
+            v.bag[v.pos] = v.sum;
+            v.pos++;
+            v.seen = 0;
+        }
+        if (v.pos == v.size) {
+            for (var i = 1; i < v.size; i += 2) {
+                v.bag[i / 2] = v.bag[i];
+            }
+            v.want *= 2;
+            v.pos /= 2;
+        }
+    }
+
+    function xingSeekTable(v, t) {
+        if (v.pos <= 0)
+            return;
+
+        for (var i = 1; i < NUMTOCENTRIES; ++i) {
+            var j = i / NUMTOCENTRIES, act, sum;
+            var indx = 0 | (Math.floor(j * v.pos));
+            if (indx > v.pos - 1)
+                indx = v.pos - 1;
+            act = v.bag[indx];
+            sum = v.sum;
+            var seek_point = 0 | (256. * act / sum);
+            if (seek_point > 255)
+                seek_point = 255;
+            t[i] = 0xff & seek_point;
+        }
+    }
+
+    /**
+     * Add VBR entry, used to fill the VBR TOC entries.
+     *
+     * @param gfp
+     *            global flags
+     */
+    this.addVbrFrame = function (gfp) {
+        var gfc = gfp.internal_flags;
+        var kbps = Tables.bitrate_table[gfp.version][gfc.bitrate_index];
+        addVbr(gfc.VBR_seek_table, kbps);
+    }
+
+    /**
+     * Read big endian integer (4-bytes) from header.
+     *
+     * @param buf
+     *            header containing the integer
+     * @param bufPos
+     *            offset into the header
+     * @return extracted integer
+     */
+    function extractInteger(buf, bufPos) {
+        var x = buf[bufPos + 0] & 0xff;
+        x <<= 8;
+        x |= buf[bufPos + 1] & 0xff;
+        x <<= 8;
+        x |= buf[bufPos + 2] & 0xff;
+        x <<= 8;
+        x |= buf[bufPos + 3] & 0xff;
+        return x;
+    }
+
+    /**
+     * Write big endian integer (4-bytes) in the header.
+     *
+     * @param buf
+     *            header to write the integer into
+     * @param bufPos
+     *            offset into the header
+     * @param value
+     *            integer value to write
+     */
+    function createInteger(buf, bufPos, value) {
+        buf[bufPos + 0] = 0xff & ((value >> 24) & 0xff);
+        buf[bufPos + 1] = 0xff & ((value >> 16) & 0xff);
+        buf[bufPos + 2] = 0xff & ((value >> 8) & 0xff);
+        buf[bufPos + 3] = 0xff & (value & 0xff);
+    }
+
+    /**
+     * Write big endian short (2-bytes) in the header.
+     *
+     * @param buf
+     *            header to write the integer into
+     * @param bufPos
+     *            offset into the header
+     * @param value
+     *            integer value to write
+     */
+    function createShort(buf, bufPos, value) {
+        buf[bufPos + 0] = 0xff & ((value >> 8) & 0xff);
+        buf[bufPos + 1] = 0xff & (value & 0xff);
+    }
+
+    /**
+     * Check for magic strings (Xing/Info).
+     *
+     * @param buf
+     *            header to check
+     * @param bufPos
+     *            header offset to check
+     * @return magic string found
+     */
+    function isVbrTag(buf, bufPos) {
+        return new String(buf, bufPos, VBRTag0.length(), ISO_8859_1)
+                .equals(VBRTag0)
+            || new String(buf, bufPos, VBRTag1.length(), ISO_8859_1)
+                .equals(VBRTag1);
+    }
+
+    function shiftInBitsValue(x, n, v) {
+        return 0xff & ((x << n) | (v & ~(-1 << n)));
+    }
+
+    /**
+     * Construct the MP3 header using the settings of the global flags.
+     *
+     * <img src="1000px-Mp3filestructure.svg.png">
+     *
+     * @param gfp
+     *            global flags
+     * @param buffer
+     *            header
+     */
+    function setLameTagFrameHeader(gfp, buffer) {
+        var gfc = gfp.internal_flags;
+
+        // MP3 Sync Word
+        buffer[0] = shiftInBitsValue(buffer[0], 8, 0xff);
+
+        buffer[1] = shiftInBitsValue(buffer[1], 3, 7);
+        buffer[1] = shiftInBitsValue(buffer[1], 1,
+            (gfp.out_samplerate < 16000) ? 0 : 1);
+        // Version
+        buffer[1] = shiftInBitsValue(buffer[1], 1, gfp.version);
+        // 01 == Layer 3
+        buffer[1] = shiftInBitsValue(buffer[1], 2, 4 - 3);
+        // Error protection
+        buffer[1] = shiftInBitsValue(buffer[1], 1, (!gfp.error_protection) ? 1
+            : 0);
+
+        // Bit rate
+        buffer[2] = shiftInBitsValue(buffer[2], 4, gfc.bitrate_index);
+        // Frequency
+        buffer[2] = shiftInBitsValue(buffer[2], 2, gfc.samplerate_index);
+        // Pad. Bit
+        buffer[2] = shiftInBitsValue(buffer[2], 1, 0);
+        // Priv. Bit
+        buffer[2] = shiftInBitsValue(buffer[2], 1, gfp.extension);
+
+        // Mode
+        buffer[3] = shiftInBitsValue(buffer[3], 2, gfp.mode.ordinal());
+        // Mode extension (Used with Joint Stereo)
+        buffer[3] = shiftInBitsValue(buffer[3], 2, gfc.mode_ext);
+        // Copy
+        buffer[3] = shiftInBitsValue(buffer[3], 1, gfp.copyright);
+        // Original
+        buffer[3] = shiftInBitsValue(buffer[3], 1, gfp.original);
+        // Emphasis
+        buffer[3] = shiftInBitsValue(buffer[3], 2, gfp.emphasis);
+
+        /* the default VBR header. 48 kbps layer III, no padding, no crc */
+        /* but sampling freq, mode and copyright/copy protection taken */
+        /* from first valid frame */
+        buffer[0] = 0xff;
+        var abyte = 0xff & (buffer[1] & 0xf1);
+        var bitrate;
+        if (1 == gfp.version) {
+            bitrate = XING_BITRATE1;
+        } else {
+            if (gfp.out_samplerate < 16000)
+                bitrate = XING_BITRATE25;
+            else
+                bitrate = XING_BITRATE2;
+        }
+
+        if (gfp.VBR == VbrMode.vbr_off)
+            bitrate = gfp.brate;
+
+        var bbyte;
+        if (gfp.free_format)
+            bbyte = 0x00;
+        else
+            bbyte = 0xff & (16 * lame.BitrateIndex(bitrate, gfp.version,
+                    gfp.out_samplerate));
+
+        /*
+         * Use as much of the info from the real frames in the Xing header:
+         * samplerate, channels, crc, etc...
+         */
+        if (gfp.version == 1) {
+            /* MPEG1 */
+            buffer[1] = 0xff & (abyte | 0x0a);
+            /* was 0x0b; */
+            abyte = 0xff & (buffer[2] & 0x0d);
+            /* AF keep also private bit */
+            buffer[2] = 0xff & (bbyte | abyte);
+            /* 64kbs MPEG1 frame */
+        } else {
+            /* MPEG2 */
+            buffer[1] = 0xff & (abyte | 0x02);
+            /* was 0x03; */
+            abyte = 0xff & (buffer[2] & 0x0d);
+            /* AF keep also private bit */
+            buffer[2] = 0xff & (bbyte | abyte);
+            /* 64kbs MPEG2 frame */
+        }
+    }
+
+    /**
+     * Get VBR tag information
+     *
+     * @param buf
+     *            header to analyze
+     * @param bufPos
+     *            offset into the header
+     * @return VBR tag data
+     */
+    this.getVbrTag = function (buf) {
+        var pTagData = new VBRTagData();
+        var bufPos = 0;
+
+        /* get Vbr header data */
+        pTagData.flags = 0;
+
+        /* get selected MPEG header data */
+        var hId = (buf[bufPos + 1] >> 3) & 1;
+        var hSrIndex = (buf[bufPos + 2] >> 2) & 3;
+        var hMode = (buf[bufPos + 3] >> 6) & 3;
+        var hBitrate = ((buf[bufPos + 2] >> 4) & 0xf);
+        hBitrate = Tables.bitrate_table[hId][hBitrate];
+
+        /* check for FFE syncword */
+        if ((buf[bufPos + 1] >> 4) == 0xE)
+            pTagData.samprate = Tables.samplerate_table[2][hSrIndex];
+        else
+            pTagData.samprate = Tables.samplerate_table[hId][hSrIndex];
+
+        /* determine offset of header */
+        if (hId != 0) {
+            /* mpeg1 */
+            if (hMode != 3)
+                bufPos += (32 + 4);
+            else
+                bufPos += (17 + 4);
+        } else {
+            /* mpeg2 */
+            if (hMode != 3)
+                bufPos += (17 + 4);
+            else
+                bufPos += (9 + 4);
+        }
+
+        if (!isVbrTag(buf, bufPos))
+            return null;
+
+        bufPos += 4;
+
+        pTagData.hId = hId;
+
+        /* get flags */
+        var head_flags = pTagData.flags = extractInteger(buf, bufPos);
+        bufPos += 4;
+
+        if ((head_flags & FRAMES_FLAG) != 0) {
+            pTagData.frames = extractInteger(buf, bufPos);
+            bufPos += 4;
+        }
+
+        if ((head_flags & BYTES_FLAG) != 0) {
+            pTagData.bytes = extractInteger(buf, bufPos);
+            bufPos += 4;
+        }
+
+        if ((head_flags & TOC_FLAG) != 0) {
+            if (pTagData.toc != null) {
+                for (var i = 0; i < NUMTOCENTRIES; i++)
+                    pTagData.toc[i] = buf[bufPos + i];
+            }
+            bufPos += NUMTOCENTRIES;
+        }
+
+        pTagData.vbrScale = -1;
+
+        if ((head_flags & VBR_SCALE_FLAG) != 0) {
+            pTagData.vbrScale = extractInteger(buf, bufPos);
+            bufPos += 4;
+        }
+
+        pTagData.headersize = ((hId + 1) * 72000 * hBitrate)
+            / pTagData.samprate;
+
+        bufPos += 21;
+        var encDelay = buf[bufPos + 0] << 4;
+        encDelay += buf[bufPos + 1] >> 4;
+        var encPadding = (buf[bufPos + 1] & 0x0F) << 8;
+        encPadding += buf[bufPos + 2] & 0xff;
+        /* check for reasonable values (this may be an old Xing header, */
+        /* not a INFO tag) */
+        if (encDelay < 0 || encDelay > 3000)
+            encDelay = -1;
+        if (encPadding < 0 || encPadding > 3000)
+            encPadding = -1;
+
+        pTagData.encDelay = encDelay;
+        pTagData.encPadding = encPadding;
+
+        /* success */
+        return pTagData;
+    }
+
+    /**
+     * Initializes the header
+     *
+     * @param gfp
+     *            global flags
+     */
+    this.InitVbrTag = function (gfp) {
+        var gfc = gfp.internal_flags;
+
+        /**
+         * <PRE>
+         * Xing VBR pretends to be a 48kbs layer III frame.  (at 44.1kHz).
+         * (at 48kHz they use 56kbs since 48kbs frame not big enough for
+         * table of contents)
+         * let's always embed Xing header inside a 64kbs layer III frame.
+         * this gives us enough room for a LAME version string too.
+         * size determined by sampling frequency (MPEG1)
+         * 32kHz:    216 bytes@48kbs    288bytes@ 64kbs
+         * 44.1kHz:  156 bytes          208bytes@64kbs     (+1 if padding = 1)
+         * 48kHz:    144 bytes          192
+         *
+         * MPEG 2 values are the same since the framesize and samplerate
+         * are each reduced by a factor of 2.
+         * </PRE>
+         */
+        var kbps_header;
+        if (1 == gfp.version) {
+            kbps_header = XING_BITRATE1;
+        } else {
+            if (gfp.out_samplerate < 16000)
+                kbps_header = XING_BITRATE25;
+            else
+                kbps_header = XING_BITRATE2;
+        }
+
+        if (gfp.VBR == VbrMode.vbr_off)
+            kbps_header = gfp.brate;
+
+        // make sure LAME Header fits into Frame
+        var totalFrameSize = ((gfp.version + 1) * 72000 * kbps_header)
+            / gfp.out_samplerate;
+        var headerSize = (gfc.sideinfo_len + LAMEHEADERSIZE);
+        gfc.VBR_seek_table.TotalFrameSize = totalFrameSize;
+        if (totalFrameSize < headerSize || totalFrameSize > MAXFRAMESIZE) {
+            /* disable tag, it wont fit */
+            gfp.bWriteVbrTag = false;
+            return;
+        }
+
+        gfc.VBR_seek_table.nVbrNumFrames = 0;
+        gfc.VBR_seek_table.nBytesWritten = 0;
+        gfc.VBR_seek_table.sum = 0;
+
+        gfc.VBR_seek_table.seen = 0;
+        gfc.VBR_seek_table.want = 1;
+        gfc.VBR_seek_table.pos = 0;
+
+        if (gfc.VBR_seek_table.bag == null) {
+            gfc.VBR_seek_table.bag = new int[400];
+            gfc.VBR_seek_table.size = 400;
+        }
+
+        // write dummy VBR tag of all 0's into bitstream
+        var buffer = new_byte(MAXFRAMESIZE);
+
+        setLameTagFrameHeader(gfp, buffer);
+        var n = gfc.VBR_seek_table.TotalFrameSize;
+        for (var i = 0; i < n; ++i) {
+            bs.add_dummy_byte(gfp, buffer[i] & 0xff, 1);
+        }
+    }
+
+    /**
+     * Fast CRC-16 computation (uses table crc16Lookup).
+     *
+     * @param value
+     * @param crc
+     * @return
+     */
+    function crcUpdateLookup(value, crc) {
+        var tmp = crc ^ value;
+        crc = (crc >> 8) ^ crc16Lookup[tmp & 0xff];
+        return crc;
+    }
+
+    this.updateMusicCRC = function (crc, buffer, bufferPos, size) {
+        for (var i = 0; i < size; ++i)
+            crc[0] = crcUpdateLookup(buffer[bufferPos + i], crc[0]);
+    }
+
+    /**
+     * Write LAME info: mini version + info on various switches used (Jonathan
+     * Dee 2001/08/31).
+     *
+     * @param gfp
+     *            global flags
+     * @param musicLength
+     *            music length
+     * @param streamBuffer
+     *            pointer to output buffer
+     * @param streamBufferPos
+     *            offset into the output buffer
+     * @param crc
+     *            computation of CRC-16 of Lame Tag so far (starting at frame
+     *            sync)
+     * @return number of bytes written to the stream
+     */
+    function putLameVBR(gfp, musicLength, streamBuffer, streamBufferPos, crc) {
+        var gfc = gfp.internal_flags;
+        var bytesWritten = 0;
+
+        /* encoder delay */
+        var encDelay = gfp.encoder_delay;
+        /* encoder padding */
+        var encPadding = gfp.encoder_padding;
+
+        /* recall: gfp.VBR_q is for example set by the switch -V */
+        /* gfp.quality by -q, -h, -f, etc */
+        var quality = (100 - 10 * gfp.VBR_q - gfp.quality);
+
+        var version = v.getLameVeryShortVersion();
+        var vbr;
+        var revision = 0x00;
+        var revMethod;
+        // numbering different in vbr_mode vs. Lame tag
+        var vbrTypeTranslator = [1, 5, 3, 2, 4, 0, 3];
+        var lowpass = 0 | (((gfp.lowpassfreq / 100.0) + .5) > 255 ? 255
+                : (gfp.lowpassfreq / 100.0) + .5);
+        var peakSignalAmplitude = 0;
+        var radioReplayGain = 0;
+        var audiophileReplayGain = 0;
+        var noiseShaping = gfp.internal_flags.noise_shaping;
+        var stereoMode = 0;
+        var nonOptimal = 0;
+        var sourceFreq = 0;
+        var misc = 0;
+        var musicCRC = 0;
+
+        // psy model type: Gpsycho or NsPsytune
+        var expNPsyTune = (gfp.exp_nspsytune & 1) != 0;
+        var safeJoint = (gfp.exp_nspsytune & 2) != 0;
+        var noGapMore = false;
+        var noGapPrevious = false;
+        var noGapCount = gfp.internal_flags.nogap_total;
+        var noGapCurr = gfp.internal_flags.nogap_current;
+
+        // 4 bits
+        var athType = gfp.ATHtype;
+        var flags = 0;
+
+        // vbr modes
+        var abrBitrate;
+        switch (gfp.VBR) {
+            case vbr_abr:
+                abrBitrate = gfp.VBR_mean_bitrate_kbps;
+                break;
+            case vbr_off:
+                abrBitrate = gfp.brate;
+                break;
+            default:
+                abrBitrate = gfp.VBR_min_bitrate_kbps;
+        }
+
+        // revision and vbr method
+        if (gfp.VBR.ordinal() < vbrTypeTranslator.length)
+            vbr = vbrTypeTranslator[gfp.VBR.ordinal()];
+        else
+            vbr = 0x00; // unknown
+
+        revMethod = 0x10 * revision + vbr;
+
+        // ReplayGain
+        if (gfc.findReplayGain) {
+            if (gfc.RadioGain > 0x1FE)
+                gfc.RadioGain = 0x1FE;
+            if (gfc.RadioGain < -0x1FE)
+                gfc.RadioGain = -0x1FE;
+
+            // set name code
+            radioReplayGain = 0x2000;
+            // set originator code to `determined automatically'
+            radioReplayGain |= 0xC00;
+
+            if (gfc.RadioGain >= 0) {
+                // set gain adjustment
+                radioReplayGain |= gfc.RadioGain;
+            } else {
+                // set the sign bit
+                radioReplayGain |= 0x200;
+                // set gain adjustment
+                radioReplayGain |= -gfc.RadioGain;
+            }
+        }
+
+        // peak sample
+        if (gfc.findPeakSample)
+            peakSignalAmplitude = Math
+                .abs(0 | ((( gfc.PeakSample) / 32767.0) * Math.pow(2, 23) + .5));
+
+        // nogap
+        if (noGapCount != -1) {
+            if (noGapCurr > 0)
+                noGapPrevious = true;
+
+            if (noGapCurr < noGapCount - 1)
+                noGapMore = true;
+        }
+
+        // flags
+        flags = athType + ((expNPsyTune ? 1 : 0) << 4)
+            + ((safeJoint ? 1 : 0) << 5) + ((noGapMore ? 1 : 0) << 6)
+            + ((noGapPrevious ? 1 : 0) << 7);
+
+        if (quality < 0)
+            quality = 0;
+
+        // stereo mode field (Intensity stereo is not implemented)
+        switch (gfp.mode) {
+            case MONO:
+                stereoMode = 0;
+                break;
+            case STEREO:
+                stereoMode = 1;
+                break;
+            case DUAL_CHANNEL:
+                stereoMode = 2;
+                break;
+            case JOINT_STEREO:
+                if (gfp.force_ms)
+                    stereoMode = 4;
+                else
+                    stereoMode = 3;
+                break;
+            case NOT_SET:
+            //$FALL-THROUGH$
+            default:
+                stereoMode = 7;
+                break;
+        }
+
+        if (gfp.in_samplerate <= 32000)
+            sourceFreq = 0x00;
+        else if (gfp.in_samplerate == 48000)
+            sourceFreq = 0x02;
+        else if (gfp.in_samplerate > 48000)
+            sourceFreq = 0x03;
+        else {
+            // default is 44100Hz
+            sourceFreq = 0x01;
+        }
+
+        // Check if the user overrided the default LAME behavior with some
+        // nasty options
+        if (gfp.short_blocks == ShortBlock.short_block_forced
+            || gfp.short_blocks == ShortBlock.short_block_dispensed
+            || ((gfp.lowpassfreq == -1) && (gfp.highpassfreq == -1)) || /* "-k" */
+            (gfp.scale_left < gfp.scale_right)
+            || (gfp.scale_left > gfp.scale_right)
+            || (gfp.disable_reservoir && gfp.brate < 320) || gfp.noATH
+            || gfp.ATHonly || (athType == 0) || gfp.in_samplerate <= 32000)
+            nonOptimal = 1;
+
+        misc = noiseShaping + (stereoMode << 2) + (nonOptimal << 5)
+            + (sourceFreq << 6);
+
+        musicCRC = gfc.nMusicCRC;
+
+        // Write all this information into the stream
+
+        createInteger(streamBuffer, streamBufferPos + bytesWritten, quality);
+        bytesWritten += 4;
+
+        for (var j = 0; j < 9; j++) {
+            streamBuffer[streamBufferPos + bytesWritten + j] = 0xff & version .charAt(j);
+        }
+        bytesWritten += 9;
+
+        streamBuffer[streamBufferPos + bytesWritten] = 0xff & revMethod;
+        bytesWritten++;
+
+        streamBuffer[streamBufferPos + bytesWritten] = 0xff & lowpass;
+        bytesWritten++;
+
+        createInteger(streamBuffer, streamBufferPos + bytesWritten,
+            peakSignalAmplitude);
+        bytesWritten += 4;
+
+        createShort(streamBuffer, streamBufferPos + bytesWritten,
+            radioReplayGain);
+        bytesWritten += 2;
+
+        createShort(streamBuffer, streamBufferPos + bytesWritten,
+            audiophileReplayGain);
+        bytesWritten += 2;
+
+        streamBuffer[streamBufferPos + bytesWritten] = 0xff & flags;
+        bytesWritten++;
+
+        if (abrBitrate >= 255)
+            streamBuffer[streamBufferPos + bytesWritten] = 0xFF;
+        else
+            streamBuffer[streamBufferPos + bytesWritten] = 0xff & abrBitrate;
+        bytesWritten++;
+
+        streamBuffer[streamBufferPos + bytesWritten] = 0xff & (encDelay >> 4);
+        streamBuffer[streamBufferPos + bytesWritten + 1] = 0xff & ((encDelay << 4) + (encPadding >> 8));
+        streamBuffer[streamBufferPos + bytesWritten + 2] = 0xff & encPadding;
+
+        bytesWritten += 3;
+
+        streamBuffer[streamBufferPos + bytesWritten] = 0xff & misc;
+        bytesWritten++;
+
+        // unused in rev0
+        streamBuffer[streamBufferPos + bytesWritten++] = 0;
+
+        createShort(streamBuffer, streamBufferPos + bytesWritten, gfp.preset);
+        bytesWritten += 2;
+
+        createInteger(streamBuffer, streamBufferPos + bytesWritten, musicLength);
+        bytesWritten += 4;
+
+        createShort(streamBuffer, streamBufferPos + bytesWritten, musicCRC);
+        bytesWritten += 2;
+
+        // Calculate tag CRC.... must be done here, since it includes previous
+        // information
+
+        for (var i = 0; i < bytesWritten; i++)
+            crc = crcUpdateLookup(streamBuffer[streamBufferPos + i], crc);
+
+        createShort(streamBuffer, streamBufferPos + bytesWritten, crc);
+        bytesWritten += 2;
+
+        return bytesWritten;
+    }
+
+    function skipId3v2(fpStream) {
+        // seek to the beginning of the stream
+        fpStream.seek(0);
+        // read 10 bytes in case there's an ID3 version 2 header here
+        var id3v2Header = new_byte(10);
+        fpStream.readFully(id3v2Header);
+        /* does the stream begin with the ID3 version 2 file identifier? */
+        var id3v2TagSize;
+        if (!new String(id3v2Header, "ISO-8859-1").startsWith("ID3")) {
+            /*
+             * the tag size (minus the 10-byte header) is encoded into four
+             * bytes where the most significant bit is clear in each byte
+             */
+            id3v2TagSize = (((id3v2Header[6] & 0x7f) << 21)
+                | ((id3v2Header[7] & 0x7f) << 14)
+                | ((id3v2Header[8] & 0x7f) << 7) | (id3v2Header[9] & 0x7f))
+                + id3v2Header.length;
+        } else {
+            /* no ID3 version 2 tag in this stream */
+            id3v2TagSize = 0;
+        }
+        return id3v2TagSize;
+    }
+
+    this.getLameTagFrame = function (gfp, buffer) {
+        var gfc = gfp.internal_flags;
+
+        if (!gfp.bWriteVbrTag) {
+            return 0;
+        }
+        if (gfc.Class_ID != Lame.LAME_ID) {
+            return 0;
+        }
+        if (gfc.VBR_seek_table.pos <= 0) {
+            return 0;
+        }
+        if (buffer.length < gfc.VBR_seek_table.TotalFrameSize) {
+            return gfc.VBR_seek_table.TotalFrameSize;
+        }
+
+        Arrays.fill(buffer, 0, gfc.VBR_seek_table.TotalFrameSize, 0);
+
+        // 4 bytes frame header
+        setLameTagFrameHeader(gfp, buffer);
+
+        // Create TOC entries
+        var toc = new_byte(NUMTOCENTRIES);
+
+        if (gfp.free_format) {
+            for (var i = 1; i < NUMTOCENTRIES; ++i)
+                toc[i] = 0xff & (255 * i / 100);
+        } else {
+            xingSeekTable(gfc.VBR_seek_table, toc);
+        }
+
+        // Start writing the tag after the zero frame
+        var streamIndex = gfc.sideinfo_len;
+        /**
+         * Note: Xing header specifies that Xing data goes in the ancillary data
+         * with NO ERROR PROTECTION. If error protecton in enabled, the Xing
+         * data still starts at the same offset, and now it is in sideinfo data
+         * block, and thus will not decode correctly by non-Xing tag aware
+         * players
+         */
+        if (gfp.error_protection)
+            streamIndex -= 2;
+
+        // Put Vbr tag
+        if (gfp.VBR == VbrMode.vbr_off) {
+            buffer[streamIndex++] = 0xff & VBRTag1.charAt(0);
+            buffer[streamIndex++] = 0xff & VBRTag1.charAt(1);
+            buffer[streamIndex++] = 0xff & VBRTag1.charAt(2);
+            buffer[streamIndex++] = 0xff & VBRTag1.charAt(3);
+
+        } else {
+            buffer[streamIndex++] = 0xff & VBRTag0.charAt(0);
+            buffer[streamIndex++] = 0xff & VBRTag0.charAt(1);
+            buffer[streamIndex++] = 0xff & VBRTag0.charAt(2);
+            buffer[streamIndex++] = 0xff & VBRTag0.charAt(3);
+        }
+
+        // Put header flags
+        createInteger(buffer, streamIndex, FRAMES_FLAG + BYTES_FLAG + TOC_FLAG
+            + VBR_SCALE_FLAG);
+        streamIndex += 4;
+
+        // Put Total Number of frames
+        createInteger(buffer, streamIndex, gfc.VBR_seek_table.nVbrNumFrames);
+        streamIndex += 4;
+
+        // Put total audio stream size, including Xing/LAME Header
+        var streamSize = (gfc.VBR_seek_table.nBytesWritten + gfc.VBR_seek_table.TotalFrameSize);
+        createInteger(buffer, streamIndex, 0 | streamSize);
+        streamIndex += 4;
+
+        /* Put TOC */
+        System.arraycopy(toc, 0, buffer, streamIndex, toc.length);
+        streamIndex += toc.length;
+
+        if (gfp.error_protection) {
+            // (jo) error_protection: add crc16 information to header
+            bs.CRC_writeheader(gfc, buffer);
+        }
+
+        // work out CRC so far: initially crc = 0
+        var crc = 0x00;
+        for (var i = 0; i < streamIndex; i++)
+            crc = crcUpdateLookup(buffer[i], crc);
+        // Put LAME VBR info
+        streamIndex += putLameVBR(gfp, streamSize, buffer, streamIndex, crc);
+
+        return gfc.VBR_seek_table.TotalFrameSize;
+    }
+
+    /**
+     * Write final VBR tag to the file.
+     *
+     * @param gfp
+     *            global flags
+     * @param stream
+     *            stream to add the VBR tag to
+     * @return 0 (OK), -1 else
+     * @throws IOException
+     *             I/O error
+     */
+    this.putVbrTag = function (gfp, stream) {
+        var gfc = gfp.internal_flags;
+
+        if (gfc.VBR_seek_table.pos <= 0)
+            return -1;
+
+        // Seek to end of file
+        stream.seek(stream.length());
+
+        // Get file size, abort if file has zero length.
+        if (stream.length() == 0)
+            return -1;
+
+        // The VBR tag may NOT be located at the beginning of the stream. If an
+        // ID3 version 2 tag was added, then it must be skipped to write the VBR
+        // tag data.
+        var id3v2TagSize = skipId3v2(stream);
+
+        // Seek to the beginning of the stream
+        stream.seek(id3v2TagSize);
+
+        var buffer = new_byte(MAXFRAMESIZE);
+        var bytes = getLameTagFrame(gfp, buffer);
+        if (bytes > buffer.length) {
+            return -1;
+        }
+
+        if (bytes < 1) {
+            return 0;
+        }
+
+        // Put it all to disk again
+        stream.write(buffer, 0, bytes);
+        // success
+        return 0;
+    }
+
+}
+
+function MeanBits(meanBits) {
+    this.bits = meanBits;
+}
+
+//package mp3;
+
+function CalcNoiseResult() {
+    /**
+     * sum of quantization noise > masking
+     */
+    this.over_noise = 0.;
+    /**
+     * sum of all quantization noise
+     */
+    this.tot_noise = 0.;
+    /**
+     * max quantization noise
+     */
+    this.max_noise = 0.;
+    /**
+     * number of quantization noise > masking
+     */
+    this.over_count = 0;
+    /**
+     * SSD-like cost of distorted bands
+     */
+    this.over_SSD = 0;
+    this.bits = 0;
+}
+
+function VBRQuantize() {
+    var qupvt;
+    var tak;
+
+    this.setModules = function (_qupvt, _tk) {
+        qupvt = _qupvt;
+        tak = _tk;
+    }
+    //TODO
+
+}
+
+function HuffCodeTab(len, max, tab, hl) {
+    this.xlen = len;
+    this.linmax = max;
+    this.table = tab;
+    this.hlen = hl;
+}
+
+var Tables = {};
+
+
+Tables.t1HB = [
+    1, 1,
+    1, 0
+];
+
+Tables.t2HB = [
+    1, 2, 1,
+    3, 1, 1,
+    3, 2, 0
+];
+
+Tables.t3HB = [
+    3, 2, 1,
+    1, 1, 1,
+    3, 2, 0
+];
+
+Tables.t5HB = [
+    1, 2, 6, 5,
+    3, 1, 4, 4,
+    7, 5, 7, 1,
+    6, 1, 1, 0
+];
+
+Tables.t6HB = [
+    7, 3, 5, 1,
+    6, 2, 3, 2,
+    5, 4, 4, 1,
+    3, 3, 2, 0
+];
+
+Tables.t7HB = [
+    1, 2, 10, 19, 16, 10,
+    3, 3, 7, 10, 5, 3,
+    11, 4, 13, 17, 8, 4,
+    12, 11, 18, 15, 11, 2,
+    7, 6, 9, 14, 3, 1,
+    6, 4, 5, 3, 2, 0
+];
+
+Tables.t8HB = [
+    3, 4, 6, 18, 12, 5,
+    5, 1, 2, 16, 9, 3,
+    7, 3, 5, 14, 7, 3,
+    19, 17, 15, 13, 10, 4,
+    13, 5, 8, 11, 5, 1,
+    12, 4, 4, 1, 1, 0
+];
+
+Tables.t9HB = [
+    7, 5, 9, 14, 15, 7,
+    6, 4, 5, 5, 6, 7,
+    7, 6, 8, 8, 8, 5,
+    15, 6, 9, 10, 5, 1,
+    11, 7, 9, 6, 4, 1,
+    14, 4, 6, 2, 6, 0
+];
+
+Tables.t10HB = [
+    1, 2, 10, 23, 35, 30, 12, 17,
+    3, 3, 8, 12, 18, 21, 12, 7,
+    11, 9, 15, 21, 32, 40, 19, 6,
+    14, 13, 22, 34, 46, 23, 18, 7,
+    20, 19, 33, 47, 27, 22, 9, 3,
+    31, 22, 41, 26, 21, 20, 5, 3,
+    14, 13, 10, 11, 16, 6, 5, 1,
+    9, 8, 7, 8, 4, 4, 2, 0
+];
+
+Tables.t11HB = [
+    3, 4, 10, 24, 34, 33, 21, 15,
+    5, 3, 4, 10, 32, 17, 11, 10,
+    11, 7, 13, 18, 30, 31, 20, 5,
+    25, 11, 19, 59, 27, 18, 12, 5,
+    35, 33, 31, 58, 30, 16, 7, 5,
+    28, 26, 32, 19, 17, 15, 8, 14,
+    14, 12, 9, 13, 14, 9, 4, 1,
+    11, 4, 6, 6, 6, 3, 2, 0
+];
+
+Tables.t12HB = [
+    9, 6, 16, 33, 41, 39, 38, 26,
+    7, 5, 6, 9, 23, 16, 26, 11,
+    17, 7, 11, 14, 21, 30, 10, 7,
+    17, 10, 15, 12, 18, 28, 14, 5,
+    32, 13, 22, 19, 18, 16, 9, 5,
+    40, 17, 31, 29, 17, 13, 4, 2,
+    27, 12, 11, 15, 10, 7, 4, 1,
+    27, 12, 8, 12, 6, 3, 1, 0
+];
+
+Tables.t13HB = [
+    1, 5, 14, 21, 34, 51, 46, 71, 42, 52, 68, 52, 67, 44, 43, 19,
+    3, 4, 12, 19, 31, 26, 44, 33, 31, 24, 32, 24, 31, 35, 22, 14,
+    15, 13, 23, 36, 59, 49, 77, 65, 29, 40, 30, 40, 27, 33, 42, 16,
+    22, 20, 37, 61, 56, 79, 73, 64, 43, 76, 56, 37, 26, 31, 25, 14,
+    35, 16, 60, 57, 97, 75, 114, 91, 54, 73, 55, 41, 48, 53, 23, 24,
+    58, 27, 50, 96, 76, 70, 93, 84, 77, 58, 79, 29, 74, 49, 41, 17,
+    47, 45, 78, 74, 115, 94, 90, 79, 69, 83, 71, 50, 59, 38, 36, 15,
+    72, 34, 56, 95, 92, 85, 91, 90, 86, 73, 77, 65, 51, 44, 43, 42,
+    43, 20, 30, 44, 55, 78, 72, 87, 78, 61, 46, 54, 37, 30, 20, 16,
+    53, 25, 41, 37, 44, 59, 54, 81, 66, 76, 57, 54, 37, 18, 39, 11,
+    35, 33, 31, 57, 42, 82, 72, 80, 47, 58, 55, 21, 22, 26, 38, 22,
+    53, 25, 23, 38, 70, 60, 51, 36, 55, 26, 34, 23, 27, 14, 9, 7,
+    34, 32, 28, 39, 49, 75, 30, 52, 48, 40, 52, 28, 18, 17, 9, 5,
+    45, 21, 34, 64, 56, 50, 49, 45, 31, 19, 12, 15, 10, 7, 6, 3,
+    48, 23, 20, 39, 36, 35, 53, 21, 16, 23, 13, 10, 6, 1, 4, 2,
+    16, 15, 17, 27, 25, 20, 29, 11, 17, 12, 16, 8, 1, 1, 0, 1
+];
+
+Tables.t15HB = [
+    7, 12, 18, 53, 47, 76, 124, 108, 89, 123, 108, 119, 107, 81, 122, 63,
+    13, 5, 16, 27, 46, 36, 61, 51, 42, 70, 52, 83, 65, 41, 59, 36,
+    19, 17, 15, 24, 41, 34, 59, 48, 40, 64, 50, 78, 62, 80, 56, 33,
+    29, 28, 25, 43, 39, 63, 55, 93, 76, 59, 93, 72, 54, 75, 50, 29,
+    52, 22, 42, 40, 67, 57, 95, 79, 72, 57, 89, 69, 49, 66, 46, 27,
+    77, 37, 35, 66, 58, 52, 91, 74, 62, 48, 79, 63, 90, 62, 40, 38,
+    125, 32, 60, 56, 50, 92, 78, 65, 55, 87, 71, 51, 73, 51, 70, 30,
+    109, 53, 49, 94, 88, 75, 66, 122, 91, 73, 56, 42, 64, 44, 21, 25,
+    90, 43, 41, 77, 73, 63, 56, 92, 77, 66, 47, 67, 48, 53, 36, 20,
+    71, 34, 67, 60, 58, 49, 88, 76, 67, 106, 71, 54, 38, 39, 23, 15,
+    109, 53, 51, 47, 90, 82, 58, 57, 48, 72, 57, 41, 23, 27, 62, 9,
+    86, 42, 40, 37, 70, 64, 52, 43, 70, 55, 42, 25, 29, 18, 11, 11,
+    118, 68, 30, 55, 50, 46, 74, 65, 49, 39, 24, 16, 22, 13, 14, 7,
+    91, 44, 39, 38, 34, 63, 52, 45, 31, 52, 28, 19, 14, 8, 9, 3,
+    123, 60, 58, 53, 47, 43, 32, 22, 37, 24, 17, 12, 15, 10, 2, 1,
+    71, 37, 34, 30, 28, 20, 17, 26, 21, 16, 10, 6, 8, 6, 2, 0
+];
+
+Tables.t16HB = [
+    1, 5, 14, 44, 74, 63, 110, 93, 172, 149, 138, 242, 225, 195, 376, 17,
+    3, 4, 12, 20, 35, 62, 53, 47, 83, 75, 68, 119, 201, 107, 207, 9,
+    15, 13, 23, 38, 67, 58, 103, 90, 161, 72, 127, 117, 110, 209, 206, 16,
+    45, 21, 39, 69, 64, 114, 99, 87, 158, 140, 252, 212, 199, 387, 365, 26,
+    75, 36, 68, 65, 115, 101, 179, 164, 155, 264, 246, 226, 395, 382, 362, 9,
+    66, 30, 59, 56, 102, 185, 173, 265, 142, 253, 232, 400, 388, 378, 445, 16,
+    111, 54, 52, 100, 184, 178, 160, 133, 257, 244, 228, 217, 385, 366, 715, 10,
+    98, 48, 91, 88, 165, 157, 148, 261, 248, 407, 397, 372, 380, 889, 884, 8,
+    85, 84, 81, 159, 156, 143, 260, 249, 427, 401, 392, 383, 727, 713, 708, 7,
+    154, 76, 73, 141, 131, 256, 245, 426, 406, 394, 384, 735, 359, 710, 352, 11,
+    139, 129, 67, 125, 247, 233, 229, 219, 393, 743, 737, 720, 885, 882, 439, 4,
+    243, 120, 118, 115, 227, 223, 396, 746, 742, 736, 721, 712, 706, 223, 436, 6,
+    202, 224, 222, 218, 216, 389, 386, 381, 364, 888, 443, 707, 440, 437, 1728, 4,
+    747, 211, 210, 208, 370, 379, 734, 723, 714, 1735, 883, 877, 876, 3459, 865, 2,
+    377, 369, 102, 187, 726, 722, 358, 711, 709, 866, 1734, 871, 3458, 870, 434, 0,
+    12, 10, 7, 11, 10, 17, 11, 9, 13, 12, 10, 7, 5, 3, 1, 3
+];
+
+Tables.t24HB = [
+    15, 13, 46, 80, 146, 262, 248, 434, 426, 669, 653, 649, 621, 517, 1032, 88,
+    14, 12, 21, 38, 71, 130, 122, 216, 209, 198, 327, 345, 319, 297, 279, 42,
+    47, 22, 41, 74, 68, 128, 120, 221, 207, 194, 182, 340, 315, 295, 541, 18,
+    81, 39, 75, 70, 134, 125, 116, 220, 204, 190, 178, 325, 311, 293, 271, 16,
+    147, 72, 69, 135, 127, 118, 112, 210, 200, 188, 352, 323, 306, 285, 540, 14,
+    263, 66, 129, 126, 119, 114, 214, 202, 192, 180, 341, 317, 301, 281, 262, 12,
+    249, 123, 121, 117, 113, 215, 206, 195, 185, 347, 330, 308, 291, 272, 520, 10,
+    435, 115, 111, 109, 211, 203, 196, 187, 353, 332, 313, 298, 283, 531, 381, 17,
+    427, 212, 208, 205, 201, 193, 186, 177, 169, 320, 303, 286, 268, 514, 377, 16,
+    335, 199, 197, 191, 189, 181, 174, 333, 321, 305, 289, 275, 521, 379, 371, 11,
+    668, 184, 183, 179, 175, 344, 331, 314, 304, 290, 277, 530, 383, 373, 366, 10,
+    652, 346, 171, 168, 164, 318, 309, 299, 287, 276, 263, 513, 375, 368, 362, 6,
+    648, 322, 316, 312, 307, 302, 292, 284, 269, 261, 512, 376, 370, 364, 359, 4,
+    620, 300, 296, 294, 288, 282, 273, 266, 515, 380, 374, 369, 365, 361, 357, 2,
+    1033, 280, 278, 274, 267, 264, 259, 382, 378, 372, 367, 363, 360, 358, 356, 0,
+    43, 20, 19, 17, 15, 13, 11, 9, 7, 6, 4, 7, 5, 3, 1, 3
+];
+
+Tables.t32HB = [
+    1 << 0, 5 << 1, 4 << 1, 5 << 2, 6 << 1, 5 << 2, 4 << 2, 4 << 3,
+    7 << 1, 3 << 2, 6 << 2, 0 << 3, 7 << 2, 2 << 3, 3 << 3, 1 << 4
+];
+
+Tables.t33HB = [
+    15 << 0, 14 << 1, 13 << 1, 12 << 2, 11 << 1, 10 << 2, 9 << 2, 8 << 3,
+    7 << 1, 6 << 2, 5 << 2, 4 << 3, 3 << 2, 2 << 3, 1 << 3, 0 << 4
+];
+
+Tables.t1l = [
+    1, 4,
+    3, 5
+];
+
+Tables.t2l = [
+    1, 4, 7,
+    4, 5, 7,
+    6, 7, 8
+];
+
+Tables.t3l = [
+    2, 3, 7,
+    4, 4, 7,
+    6, 7, 8
+];
+
+Tables.t5l = [
+    1, 4, 7, 8,
+    4, 5, 8, 9,
+    7, 8, 9, 10,
+    8, 8, 9, 10
+];
+
+Tables.t6l = [
+    3, 4, 6, 8,
+    4, 4, 6, 7,
+    5, 6, 7, 8,
+    7, 7, 8, 9
+];
+
+Tables.t7l = [
+    1, 4, 7, 9, 9, 10,
+    4, 6, 8, 9, 9, 10,
+    7, 7, 9, 10, 10, 11,
+    8, 9, 10, 11, 11, 11,
+    8, 9, 10, 11, 11, 12,
+    9, 10, 11, 12, 12, 12
+];
+
+Tables.t8l = [
+    2, 4, 7, 9, 9, 10,
+    4, 4, 6, 10, 10, 10,
+    7, 6, 8, 10, 10, 11,
+    9, 10, 10, 11, 11, 12,
+    9, 9, 10, 11, 12, 12,
+    10, 10, 11, 11, 13, 13
+];
+
+Tables.t9l = [
+    3, 4, 6, 7, 9, 10,
+    4, 5, 6, 7, 8, 10,
+    5, 6, 7, 8, 9, 10,
+    7, 7, 8, 9, 9, 10,
+    8, 8, 9, 9, 10, 11,
+    9, 9, 10, 10, 11, 11
+];
+
+Tables.t10l = [
+    1, 4, 7, 9, 10, 10, 10, 11,
+    4, 6, 8, 9, 10, 11, 10, 10,
+    7, 8, 9, 10, 11, 12, 11, 11,
+    8, 9, 10, 11, 12, 12, 11, 12,
+    9, 10, 11, 12, 12, 12, 12, 12,
+    10, 11, 12, 12, 13, 13, 12, 13,
+    9, 10, 11, 12, 12, 12, 13, 13,
+    10, 10, 11, 12, 12, 13, 13, 13
+];
+
+Tables.t11l = [
+    2, 4, 6, 8, 9, 10, 9, 10,
+    4, 5, 6, 8, 10, 10, 9, 10,
+    6, 7, 8, 9, 10, 11, 10, 10,
+    8, 8, 9, 11, 10, 12, 10, 11,
+    9, 10, 10, 11, 11, 12, 11, 12,
+    9, 10, 11, 12, 12, 13, 12, 13,
+    9, 9, 9, 10, 11, 12, 12, 12,
+    9, 9, 10, 11, 12, 12, 12, 12
+];
+
+Tables.t12l = [
+    4, 4, 6, 8, 9, 10, 10, 10,
+    4, 5, 6, 7, 9, 9, 10, 10,
+    6, 6, 7, 8, 9, 10, 9, 10,
+    7, 7, 8, 8, 9, 10, 10, 10,
+    8, 8, 9, 9, 10, 10, 10, 11,
+    9, 9, 10, 10, 10, 11, 10, 11,
+    9, 9, 9, 10, 10, 11, 11, 12,
+    10, 10, 10, 11, 11, 11, 11, 12
+];
+
+Tables.t13l = [
+    1, 5, 7, 8, 9, 10, 10, 11, 10, 11, 12, 12, 13, 13, 14, 14,
+    4, 6, 8, 9, 10, 10, 11, 11, 11, 11, 12, 12, 13, 14, 14, 14,
+    7, 8, 9, 10, 11, 11, 12, 12, 11, 12, 12, 13, 13, 14, 15, 15,
+    8, 9, 10, 11, 11, 12, 12, 12, 12, 13, 13, 13, 13, 14, 15, 15,
+    9, 9, 11, 11, 12, 12, 13, 13, 12, 13, 13, 14, 14, 15, 15, 16,
+    10, 10, 11, 12, 12, 12, 13, 13, 13, 13, 14, 13, 15, 15, 16, 16,
+    10, 11, 12, 12, 13, 13, 13, 13, 13, 14, 14, 14, 15, 15, 16, 16,
+    11, 11, 12, 13, 13, 13, 14, 14, 14, 14, 15, 15, 15, 16, 18, 18,
+    10, 10, 11, 12, 12, 13, 13, 14, 14, 14, 14, 15, 15, 16, 17, 17,
+    11, 11, 12, 12, 13, 13, 13, 15, 14, 15, 15, 16, 16, 16, 18, 17,
+    11, 12, 12, 13, 13, 14, 14, 15, 14, 15, 16, 15, 16, 17, 18, 19,
+    12, 12, 12, 13, 14, 14, 14, 14, 15, 15, 15, 16, 17, 17, 17, 18,
+    12, 13, 13, 14, 14, 15, 14, 15, 16, 16, 17, 17, 17, 18, 18, 18,
+    13, 13, 14, 15, 15, 15, 16, 16, 16, 16, 16, 17, 18, 17, 18, 18,
+    14, 14, 14, 15, 15, 15, 17, 16, 16, 19, 17, 17, 17, 19, 18, 18,
+    13, 14, 15, 16, 16, 16, 17, 16, 17, 17, 18, 18, 21, 20, 21, 18
+];
+
+Tables.t15l = [
+    3, 5, 6, 8, 8, 9, 10, 10, 10, 11, 11, 12, 12, 12, 13, 14,
+    5, 5, 7, 8, 9, 9, 10, 10, 10, 11, 11, 12, 12, 12, 13, 13,
+    6, 7, 7, 8, 9, 9, 10, 10, 10, 11, 11, 12, 12, 13, 13, 13,
+    7, 8, 8, 9, 9, 10, 10, 11, 11, 11, 12, 12, 12, 13, 13, 13,
+    8, 8, 9, 9, 10, 10, 11, 11, 11, 11, 12, 12, 12, 13, 13, 13,
+    9, 9, 9, 10, 10, 10, 11, 11, 11, 11, 12, 12, 13, 13, 13, 14,
+    10, 9, 10, 10, 10, 11, 11, 11, 11, 12, 12, 12, 13, 13, 14, 14,
+    10, 10, 10, 11, 11, 11, 11, 12, 12, 12, 12, 12, 13, 13, 13, 14,
+    10, 10, 10, 11, 11, 11, 11, 12, 12, 12, 12, 13, 13, 14, 14, 14,
+    10, 10, 11, 11, 11, 11, 12, 12, 12, 13, 13, 13, 13, 14, 14, 14,
+    11, 11, 11, 11, 12, 12, 12, 12, 12, 13, 13, 13, 13, 14, 15, 14,
+    11, 11, 11, 11, 12, 12, 12, 12, 13, 13, 13, 13, 14, 14, 14, 15,
+    12, 12, 11, 12, 12, 12, 13, 13, 13, 13, 13, 13, 14, 14, 15, 15,
+    12, 12, 12, 12, 12, 13, 13, 13, 13, 14, 14, 14, 14, 14, 15, 15,
+    13, 13, 13, 13, 13, 13, 13, 13, 14, 14, 14, 14, 15, 15, 14, 15,
+    13, 13, 13, 13, 13, 13, 13, 14, 14, 14, 14, 14, 15, 15, 15, 15
+];
+
+Tables.t16_5l = [
+    1, 5, 7, 9, 10, 10, 11, 11, 12, 12, 12, 13, 13, 13, 14, 11,
+    4, 6, 8, 9, 10, 11, 11, 11, 12, 12, 12, 13, 14, 13, 14, 11,
+    7, 8, 9, 10, 11, 11, 12, 12, 13, 12, 13, 13, 13, 14, 14, 12,
+    9, 9, 10, 11, 11, 12, 12, 12, 13, 13, 14, 14, 14, 15, 15, 13,
+    10, 10, 11, 11, 12, 12, 13, 13, 13, 14, 14, 14, 15, 15, 15, 12,
+    10, 10, 11, 11, 12, 13, 13, 14, 13, 14, 14, 15, 15, 15, 16, 13,
+    11, 11, 11, 12, 13, 13, 13, 13, 14, 14, 14, 14, 15, 15, 16, 13,
+    11, 11, 12, 12, 13, 13, 13, 14, 14, 15, 15, 15, 15, 17, 17, 13,
+    11, 12, 12, 13, 13, 13, 14, 14, 15, 15, 15, 15, 16, 16, 16, 13,
+    12, 12, 12, 13, 13, 14, 14, 15, 15, 15, 15, 16, 15, 16, 15, 14,
+    12, 13, 12, 13, 14, 14, 14, 14, 15, 16, 16, 16, 17, 17, 16, 13,
+    13, 13, 13, 13, 14, 14, 15, 16, 16, 16, 16, 16, 16, 15, 16, 14,
+    13, 14, 14, 14, 14, 15, 15, 15, 15, 17, 16, 16, 16, 16, 18, 14,
+    15, 14, 14, 14, 15, 15, 16, 16, 16, 18, 17, 17, 17, 19, 17, 14,
+    14, 15, 13, 14, 16, 16, 15, 16, 16, 17, 18, 17, 19, 17, 16, 14,
+    11, 11, 11, 12, 12, 13, 13, 13, 14, 14, 14, 14, 14, 14, 14, 12
+];
+
+Tables.t16l = [
+    1, 5, 7, 9, 10, 10, 11, 11, 12, 12, 12, 13, 13, 13, 14, 10,
+    4, 6, 8, 9, 10, 11, 11, 11, 12, 12, 12, 13, 14, 13, 14, 10,
+    7, 8, 9, 10, 11, 11, 12, 12, 13, 12, 13, 13, 13, 14, 14, 11,
+    9, 9, 10, 11, 11, 12, 12, 12, 13, 13, 14, 14, 14, 15, 15, 12,
+    10, 10, 11, 11, 12, 12, 13, 13, 13, 14, 14, 14, 15, 15, 15, 11,
+    10, 10, 11, 11, 12, 13, 13, 14, 13, 14, 14, 15, 15, 15, 16, 12,
+    11, 11, 11, 12, 13, 13, 13, 13, 14, 14, 14, 14, 15, 15, 16, 12,
+    11, 11, 12, 12, 13, 13, 13, 14, 14, 15, 15, 15, 15, 17, 17, 12,
+    11, 12, 12, 13, 13, 13, 14, 14, 15, 15, 15, 15, 16, 16, 16, 12,
+    12, 12, 12, 13, 13, 14, 14, 15, 15, 15, 15, 16, 15, 16, 15, 13,
+    12, 13, 12, 13, 14, 14, 14, 14, 15, 16, 16, 16, 17, 17, 16, 12,
+    13, 13, 13, 13, 14, 14, 15, 16, 16, 16, 16, 16, 16, 15, 16, 13,
+    13, 14, 14, 14, 14, 15, 15, 15, 15, 17, 16, 16, 16, 16, 18, 13,
+    15, 14, 14, 14, 15, 15, 16, 16, 16, 18, 17, 17, 17, 19, 17, 13,
+    14, 15, 13, 14, 16, 16, 15, 16, 16, 17, 18, 17, 19, 17, 16, 13,
+    10, 10, 10, 11, 11, 12, 12, 12, 13, 13, 13, 13, 13, 13, 13, 10
+];
+
+Tables.t24l = [
+    4, 5, 7, 8, 9, 10, 10, 11, 11, 12, 12, 12, 12, 12, 13, 10,
+    5, 6, 7, 8, 9, 10, 10, 11, 11, 11, 12, 12, 12, 12, 12, 10,
+    7, 7, 8, 9, 9, 10, 10, 11, 11, 11, 11, 12, 12, 12, 13, 9,
+    8, 8, 9, 9, 10, 10, 10, 11, 11, 11, 11, 12, 12, 12, 12, 9,
+    9, 9, 9, 10, 10, 10, 10, 11, 11, 11, 12, 12, 12, 12, 13, 9,
+    10, 9, 10, 10, 10, 10, 11, 11, 11, 11, 12, 12, 12, 12, 12, 9,
+    10, 10, 10, 10, 10, 11, 11, 11, 11, 12, 12, 12, 12, 12, 13, 9,
+    11, 10, 10, 10, 11, 11, 11, 11, 12, 12, 12, 12, 12, 13, 13, 10,
+    11, 11, 11, 11, 11, 11, 11, 11, 11, 12, 12, 12, 12, 13, 13, 10,
+    11, 11, 11, 11, 11, 11, 11, 12, 12, 12, 12, 12, 13, 13, 13, 10,
+    12, 11, 11, 11, 11, 12, 12, 12, 12, 12, 12, 13, 13, 13, 13, 10,
+    12, 12, 11, 11, 11, 12, 12, 12, 12, 12, 12, 13, 13, 13, 13, 10,
+    12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 13, 13, 13, 13, 13, 10,
+    12, 12, 12, 12, 12, 12, 12, 12, 13, 13, 13, 13, 13, 13, 13, 10,
+    13, 12, 12, 12, 12, 12, 12, 13, 13, 13, 13, 13, 13, 13, 13, 10,
+    9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 10, 10, 10, 10, 6
+];
+
+Tables.t32l = [
+    1 + 0, 4 + 1, 4 + 1, 5 + 2, 4 + 1, 6 + 2, 5 + 2, 6 + 3,
+    4 + 1, 5 + 2, 5 + 2, 6 + 3, 5 + 2, 6 + 3, 6 + 3, 6 + 4
+];
+
+Tables.t33l = [
+    4 + 0, 4 + 1, 4 + 1, 4 + 2, 4 + 1, 4 + 2, 4 + 2, 4 + 3,
+    4 + 1, 4 + 2, 4 + 2, 4 + 3, 4 + 2, 4 + 3, 4 + 3, 4 + 4
+];
+
+Tables.ht = [
+    /* xlen, linmax, table, hlen */
+    new HuffCodeTab(0, 0, null, null),
+    new HuffCodeTab(2, 0, Tables.t1HB, Tables.t1l),
+    new HuffCodeTab(3, 0, Tables.t2HB, Tables.t2l),
+    new HuffCodeTab(3, 0, Tables.t3HB, Tables.t3l),
+    new HuffCodeTab(0, 0, null, null), /* Apparently not used */
+    new HuffCodeTab(4, 0, Tables.t5HB, Tables.t5l),
+    new HuffCodeTab(4, 0, Tables.t6HB, Tables.t6l),
+    new HuffCodeTab(6, 0, Tables.t7HB, Tables.t7l),
+    new HuffCodeTab(6, 0, Tables.t8HB, Tables.t8l),
+    new HuffCodeTab(6, 0, Tables.t9HB, Tables.t9l),
+    new HuffCodeTab(8, 0, Tables.t10HB, Tables.t10l),
+    new HuffCodeTab(8, 0, Tables.t11HB, Tables.t11l),
+    new HuffCodeTab(8, 0, Tables.t12HB, Tables.t12l),
+    new HuffCodeTab(16, 0, Tables.t13HB, Tables.t13l),
+    new HuffCodeTab(0, 0, null, Tables.t16_5l), /* Apparently not used */
+    new HuffCodeTab(16, 0, Tables.t15HB, Tables.t15l),
+
+    new HuffCodeTab(1, 1, Tables.t16HB, Tables.t16l),
+    new HuffCodeTab(2, 3, Tables.t16HB, Tables.t16l),
+    new HuffCodeTab(3, 7, Tables.t16HB, Tables.t16l),
+    new HuffCodeTab(4, 15, Tables.t16HB, Tables.t16l),
+    new HuffCodeTab(6, 63, Tables.t16HB, Tables.t16l),
+    new HuffCodeTab(8, 255, Tables.t16HB, Tables.t16l),
+    new HuffCodeTab(10, 1023, Tables.t16HB, Tables.t16l),
+    new HuffCodeTab(13, 8191, Tables.t16HB, Tables.t16l),
+
+    new HuffCodeTab(4, 15, Tables.t24HB, Tables.t24l),
+    new HuffCodeTab(5, 31, Tables.t24HB, Tables.t24l),
+    new HuffCodeTab(6, 63, Tables.t24HB, Tables.t24l),
+    new HuffCodeTab(7, 127, Tables.t24HB, Tables.t24l),
+    new HuffCodeTab(8, 255, Tables.t24HB, Tables.t24l),
+    new HuffCodeTab(9, 511, Tables.t24HB, Tables.t24l),
+    new HuffCodeTab(11, 2047, Tables.t24HB, Tables.t24l),
+    new HuffCodeTab(13, 8191, Tables.t24HB, Tables.t24l),
+
+    new HuffCodeTab(0, 0, Tables.t32HB, Tables.t32l),
+    new HuffCodeTab(0, 0, Tables.t33HB, Tables.t33l),
+];
+
+/**
+ * <CODE>
+ *  for (i = 0; i < 16*16; i++) [
+ *      largetbl[i] = ((ht[16].hlen[i]) << 16) + ht[24].hlen[i];
+ *  ]
+ * </CODE>
+ *
+ */
+Tables.largetbl = [
+    0x010004, 0x050005, 0x070007, 0x090008, 0x0a0009, 0x0a000a, 0x0b000a, 0x0b000b,
+    0x0c000b, 0x0c000c, 0x0c000c, 0x0d000c, 0x0d000c, 0x0d000c, 0x0e000d, 0x0a000a,
+    0x040005, 0x060006, 0x080007, 0x090008, 0x0a0009, 0x0b000a, 0x0b000a, 0x0b000b,
+    0x0c000b, 0x0c000b, 0x0c000c, 0x0d000c, 0x0e000c, 0x0d000c, 0x0e000c, 0x0a000a,
+    0x070007, 0x080007, 0x090008, 0x0a0009, 0x0b0009, 0x0b000a, 0x0c000a, 0x0c000b,
+    0x0d000b, 0x0c000b, 0x0d000b, 0x0d000c, 0x0d000c, 0x0e000c, 0x0e000d, 0x0b0009,
+    0x090008, 0x090008, 0x0a0009, 0x0b0009, 0x0b000a, 0x0c000a, 0x0c000a, 0x0c000b,
+    0x0d000b, 0x0d000b, 0x0e000b, 0x0e000c, 0x0e000c, 0x0f000c, 0x0f000c, 0x0c0009,
+    0x0a0009, 0x0a0009, 0x0b0009, 0x0b000a, 0x0c000a, 0x0c000a, 0x0d000a, 0x0d000b,
+    0x0d000b, 0x0e000b, 0x0e000c, 0x0e000c, 0x0f000c, 0x0f000c, 0x0f000d, 0x0b0009,
+    0x0a000a, 0x0a0009, 0x0b000a, 0x0b000a, 0x0c000a, 0x0d000a, 0x0d000b, 0x0e000b,
+    0x0d000b, 0x0e000b, 0x0e000c, 0x0f000c, 0x0f000c, 0x0f000c, 0x10000c, 0x0c0009,
+    0x0b000a, 0x0b000a, 0x0b000a, 0x0c000a, 0x0d000a, 0x0d000b, 0x0d000b, 0x0d000b,
+    0x0e000b, 0x0e000c, 0x0e000c, 0x0e000c, 0x0f000c, 0x0f000c, 0x10000d, 0x0c0009,
+    0x0b000b, 0x0b000a, 0x0c000a, 0x0c000a, 0x0d000b, 0x0d000b, 0x0d000b, 0x0e000b,
+    0x0e000c, 0x0f000c, 0x0f000c, 0x0f000c, 0x0f000c, 0x11000d, 0x11000d, 0x0c000a,
+    0x0b000b, 0x0c000b, 0x0c000b, 0x0d000b, 0x0d000b, 0x0d000b, 0x0e000b, 0x0e000b,
+    0x0f000b, 0x0f000c, 0x0f000c, 0x0f000c, 0x10000c, 0x10000d, 0x10000d, 0x0c000a,
+    0x0c000b, 0x0c000b, 0x0c000b, 0x0d000b, 0x0d000b, 0x0e000b, 0x0e000b, 0x0f000c,
+    0x0f000c, 0x0f000c, 0x0f000c, 0x10000c, 0x0f000d, 0x10000d, 0x0f000d, 0x0d000a,
+    0x0c000c, 0x0d000b, 0x0c000b, 0x0d000b, 0x0e000b, 0x0e000c, 0x0e000c, 0x0e000c,
+    0x0f000c, 0x10000c, 0x10000c, 0x10000d, 0x11000d, 0x11000d, 0x10000d, 0x0c000a,
+    0x0d000c, 0x0d000c, 0x0d000b, 0x0d000b, 0x0e000b, 0x0e000c, 0x0f000c, 0x10000c,
+    0x10000c, 0x10000c, 0x10000c, 0x10000d, 0x10000d, 0x0f000d, 0x10000d, 0x0d000a,
+    0x0d000c, 0x0e000c, 0x0e000c, 0x0e000c, 0x0e000c, 0x0f000c, 0x0f000c, 0x0f000c,
+    0x0f000c, 0x11000c, 0x10000d, 0x10000d, 0x10000d, 0x10000d, 0x12000d, 0x0d000a,
+    0x0f000c, 0x0e000c, 0x0e000c, 0x0e000c, 0x0f000c, 0x0f000c, 0x10000c, 0x10000c,
+    0x10000d, 0x12000d, 0x11000d, 0x11000d, 0x11000d, 0x13000d, 0x11000d, 0x0d000a,
+    0x0e000d, 0x0f000c, 0x0d000c, 0x0e000c, 0x10000c, 0x10000c, 0x0f000c, 0x10000d,
+    0x10000d, 0x11000d, 0x12000d, 0x11000d, 0x13000d, 0x11000d, 0x10000d, 0x0d000a,
+    0x0a0009, 0x0a0009, 0x0a0009, 0x0b0009, 0x0b0009, 0x0c0009, 0x0c0009, 0x0c0009,
+    0x0d0009, 0x0d0009, 0x0d0009, 0x0d000a, 0x0d000a, 0x0d000a, 0x0d000a, 0x0a0006
+];
+/**
+ * <CODE>
+ *  for (i = 0; i < 3*3; i++) [
+ *      table23[i] = ((ht[2].hlen[i]) << 16) + ht[3].hlen[i];
+ *  ]
+ * </CODE>
+ *
+ */
+Tables.table23 = [
+    0x010002, 0x040003, 0x070007,
+    0x040004, 0x050004, 0x070007,
+    0x060006, 0x070007, 0x080008
+];
+
+/**
+ * <CODE>
+ *  for (i = 0; i < 4*4; i++) [
+ *       table56[i] = ((ht[5].hlen[i]) << 16) + ht[6].hlen[i];
+ *   ]
+ * </CODE>
+ *
+ */
+Tables.table56 = [
+    0x010003, 0x040004, 0x070006, 0x080008, 0x040004, 0x050004, 0x080006, 0x090007,
+    0x070005, 0x080006, 0x090007, 0x0a0008, 0x080007, 0x080007, 0x090008, 0x0a0009
+];
+
+Tables.bitrate_table = [
+    [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160, -1], /* MPEG 2 */
+    [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, -1], /* MPEG 1 */
+    [0, 8, 16, 24, 32, 40, 48, 56, 64, -1, -1, -1, -1, -1, -1, -1], /* MPEG 2.5 */
+];
+
+/**
+ * MPEG 2, MPEG 1, MPEG 2.5.
+ */
+Tables.samplerate_table = [
+    [22050, 24000, 16000, -1],
+    [44100, 48000, 32000, -1],
+    [11025, 12000, 8000, -1],
+];
+
+/**
+ * This is the scfsi_band table from 2.4.2.7 of the IS.
+ */
+Tables.scfsi_band = [0, 6, 11, 16, 21];
+
 /*
  *	MP3 huffman table selecting and bit counting
  *
@@ -2409,3206 +5168,6 @@ function Takehiro() {
     }
 }
 
-/*
- *      bit reservoir source file
- *
- *      Copyright (c) 1999-2000 Mark Taylor
- *
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Lesser General Public
- * License as published by the Free Software Foundation; either
- * version 2 of the License, or (at your option) any later version.
- *
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Library General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the
- * Free Software Foundation, Inc., 59 Temple Place - Suite 330,
- * Boston, MA 02111-1307, USA.
- */
-
-/* $Id: Reservoir.java,v 1.9 2011/05/24 20:48:06 kenchis Exp $ */
-
-//package mp3;
-
-/**
- * ResvFrameBegin:<BR>
- * Called (repeatedly) at the beginning of a frame. Updates the maximum size of
- * the reservoir, and checks to make sure main_data_begin was set properly by
- * the formatter<BR>
- * Background information:
- * 
- * This is the original text from the ISO standard. Because of sooo many bugs
- * and irritations correcting comments are added in brackets []. A '^W' means
- * you should remove the last word.
- * 
- * <PRE>
- *  1. The following rule can be used to calculate the maximum
- *     number of bits used for one granule [^W frame]:<BR>
- *     At the highest possible bitrate of Layer III (320 kbps
- *     per stereo signal [^W^W^W], 48 kHz) the frames must be of
- *     [^W^W^W are designed to have] constant length, i.e.
- *     one buffer [^W^W the frame] length is:<BR>
- * 
- *         320 kbps * 1152/48 kHz = 7680 bit = 960 byte
- * 
- *     This value is used as the maximum buffer per channel [^W^W] at
- *     lower bitrates [than 320 kbps]. At 64 kbps mono or 128 kbps
- *     stereo the main granule length is 64 kbps * 576/48 kHz = 768 bit
- *     [per granule and channel] at 48 kHz sampling frequency.
- *     This means that there is a maximum deviation (short time buffer
- *     [= reservoir]) of 7680 - 2*2*768 = 4608 bits is allowed at 64 kbps.
- *     The actual deviation is equal to the number of bytes [with the
- *     meaning of octets] denoted by the main_data_end offset pointer.
- *     The actual maximum deviation is (2^9-1)*8 bit = 4088 bits
- *     [for MPEG-1 and (2^8-1)*8 bit for MPEG-2, both are hard limits].
- *     ... The xchange of buffer bits between the left and right channel
- *     is allowed without restrictions [exception: dual channel].
- *     Because of the [constructed] constraint on the buffer size
- *     main_data_end is always set to 0 in the case of bit_rate_index==14,
- *     i.e. data rate 320 kbps per stereo signal [^W^W^W]. In this case
- *     all data are allocated between adjacent header [^W sync] words
- *     [, i.e. there is no buffering at all].
- * </PRE>
- */
-
-
-function Reservoir() {
-	var bs;
-
-	this.setModules  = function(_bs) {
-		bs = _bs;
-	}
-
-	this.ResvFrameBegin = function(gfp, mean_bits) {
-		var gfc = gfp.internal_flags;
-		var maxmp3buf;
-		var l3_side = gfc.l3_side;
-
-		var frameLength = bs.getframebits(gfp);
-		mean_bits.bits = (frameLength - gfc.sideinfo_len * 8) / gfc.mode_gr;
-
-		/**
-		 * <PRE>
-		 *  Meaning of the variables:
-		 *      resvLimit: (0, 8, ..., 8*255 (MPEG-2), 8*511 (MPEG-1))
-		 *          Number of bits can be stored in previous frame(s) due to
-		 *          counter size constaints
-		 *      maxmp3buf: ( ??? ... 8*1951 (MPEG-1 and 2), 8*2047 (MPEG-2.5))
-		 *          Number of bits allowed to encode one frame (you can take 8*511 bit
-		 *          from the bit reservoir and at most 8*1440 bit from the current
-		 *          frame (320 kbps, 32 kHz), so 8*1951 bit is the largest possible
-		 *          value for MPEG-1 and -2)
-		 * 
-		 *          maximum allowed granule/channel size times 4 = 8*2047 bits.,
-		 *          so this is the absolute maximum supported by the format.
-		 * 
-		 * 
-		 *      fullFrameBits:  maximum number of bits available for encoding
-		 *                      the current frame.
-		 * 
-		 *      mean_bits:      target number of bits per granule.
-		 * 
-		 *      frameLength:
-		 * 
-		 *      gfc.ResvMax:   maximum allowed reservoir
-		 * 
-		 *      gfc.ResvSize:  current reservoir size
-		 * 
-		 *      l3_side.resvDrain_pre:
-		 *         ancillary data to be added to previous frame:
-		 *         (only usefull in VBR modes if it is possible to have
-		 *         maxmp3buf < fullFrameBits)).  Currently disabled,
-		 *         see #define NEW_DRAIN
-		 *         2010-02-13: RH now enabled, it seems to be needed for CBR too,
-		 *                     as there exists one example, where the FhG decoder
-		 *                     can't decode a -b320 CBR file anymore.
-		 * 
-		 *      l3_side.resvDrain_post:
-		 *         ancillary data to be added to this frame:
-		 * 
-		 * </PRE>
-		 */
-
-		/* main_data_begin has 9 bits in MPEG-1, 8 bits MPEG-2 */
-		var resvLimit = (8 * 256) * gfc.mode_gr - 8;
-
-		/*
-		 * maximum allowed frame size. dont use more than this number of bits,
-		 * even if the frame has the space for them:
-		 */
-		if (gfp.brate > 320) {
-			/* in freeformat the buffer is constant */
-			maxmp3buf = 8 * ((int) ((gfp.brate * 1000)
-					/ (gfp.out_samplerate / 1152) / 8 + .5));
-		} else {
-			/*
-			 * all mp3 decoders should have enough buffer to handle this value:
-			 * size of a 320kbps 32kHz frame
-			 */
-			maxmp3buf = 8 * 1440;
-
-			/*
-			 * Bouvigne suggests this more lax interpretation of the ISO doc
-			 * instead of using 8*960.
-			 */
-
-			if (gfp.strict_ISO) {
-				maxmp3buf = 8 * ((int) (320000 / (gfp.out_samplerate / 1152) / 8 + .5));
-			}
-		}
-
-		gfc.ResvMax = maxmp3buf - frameLength;
-		if (gfc.ResvMax > resvLimit)
-			gfc.ResvMax = resvLimit;
-		if (gfc.ResvMax < 0 || gfp.disable_reservoir)
-			gfc.ResvMax = 0;
-
-		var fullFrameBits = mean_bits.bits * gfc.mode_gr
-				+ Math.min(gfc.ResvSize, gfc.ResvMax);
-
-		if (fullFrameBits > maxmp3buf)
-			fullFrameBits = maxmp3buf;
-
-
-		l3_side.resvDrain_pre = 0;
-
-		// frame analyzer code
-		if (gfc.pinfo != null) {
-			/*
-			 * expected bits per channel per granule [is this also right for
-			 * mono/stereo, MPEG-1/2 ?]
-			 */
-			gfc.pinfo.mean_bits = mean_bits.bits / 2;
-			gfc.pinfo.resvsize = gfc.ResvSize;
-		}
-
-		return fullFrameBits;
-	}
-
-	/**
-	 * returns targ_bits: target number of bits to use for 1 granule<BR>
-	 * extra_bits: amount extra available from reservoir<BR>
-	 * Mark Taylor 4/99
-	 */
-	this.ResvMaxBits = function(gfp, mean_bits, targ_bits, cbr) {
-		var gfc = gfp.internal_flags;
-		var add_bits;
-        var ResvSize = gfc.ResvSize, ResvMax = gfc.ResvMax;
-
-		/* compensate the saved bits used in the 1st granule */
-		if (cbr != 0)
-			ResvSize += mean_bits;
-
-		if ((gfc.substep_shaping & 1) != 0)
-			ResvMax *= 0.9;
-
-		targ_bits.bits = mean_bits;
-
-		/* extra bits if the reservoir is almost full */
-		if (ResvSize * 10 > ResvMax * 9) {
-			add_bits = ResvSize - (ResvMax * 9) / 10;
-			targ_bits.bits += add_bits;
-			gfc.substep_shaping |= 0x80;
-		} else {
-			add_bits = 0;
-			gfc.substep_shaping &= 0x7f;
-			/*
-			 * build up reservoir. this builds the reservoir a little slower
-			 * than FhG. It could simple be mean_bits/15, but this was rigged to
-			 * always produce 100 (the old value) at 128kbs
-			 */
-			if (!gfp.disable_reservoir && 0 == (gfc.substep_shaping & 1))
-				targ_bits.bits -= .1 * mean_bits;
-		}
-
-		/* amount from the reservoir we are allowed to use. ISO says 6/10 */
-		var extra_bits = (ResvSize < (gfc.ResvMax * 6) / 10 ? ResvSize
-				: (gfc.ResvMax * 6) / 10);
-		extra_bits -= add_bits;
-
-		if (extra_bits < 0)
-			extra_bits = 0;
-		return extra_bits;
-	}
-
-	/**
-	 * Called after a granule's bit allocation. Readjusts the size of the
-	 * reservoir to reflect the granule's usage.
-	 */
-	this.ResvAdjust = function(gfc, gi) {
-		gfc.ResvSize -= gi.part2_3_length + gi.part2_length;
-	}
-
-	/**
-	 * Called after all granules in a frame have been allocated. Makes sure that
-	 * the reservoir size is within limits, possibly by adding stuffing bits.
-	 */
-	this.ResvFrameEnd = function(gfc, mean_bits) {
-		var over_bits;
-		var l3_side = gfc.l3_side;
-
-		gfc.ResvSize += mean_bits * gfc.mode_gr;
-		var stuffingBits = 0;
-		l3_side.resvDrain_post = 0;
-		l3_side.resvDrain_pre = 0;
-
-		/* we must be byte aligned */
-		if ((over_bits = gfc.ResvSize % 8) != 0)
-			stuffingBits += over_bits;
-
-		over_bits = (gfc.ResvSize - stuffingBits) - gfc.ResvMax;
-		if (over_bits > 0) {
-			stuffingBits += over_bits;
-		}
-
-		/*
-		 * NOTE: enabling the NEW_DRAIN code fixes some problems with FhG
-		 * decoder shipped with MS Windows operating systems. Using this, it is
-		 * even possible to use Gabriel's lax buffer consideration again, which
-		 * assumes, any decoder should have a buffer large enough for a 320 kbps
-		 * frame at 32 kHz sample rate.
-		 * 
-		 * old drain code: lame -b320 BlackBird.wav --. does not play with
-		 * GraphEdit.exe using FhG decoder V1.5 Build 50
-		 * 
-		 * new drain code: lame -b320 BlackBird.wav --. plays fine with
-		 * GraphEdit.exe using FhG decoder V1.5 Build 50
-		 * 
-		 * Robert Hegemann, 2010-02-13.
-		 */
-		/*
-		 * drain as many bits as possible into previous frame ancillary data In
-		 * particular, in VBR mode ResvMax may have changed, and we have to make
-		 * sure main_data_begin does not create a reservoir bigger than ResvMax
-		 * mt 4/00
-		 */
-		{
-			var mdb_bytes = Math.min(l3_side.main_data_begin * 8, stuffingBits) / 8;
-			l3_side.resvDrain_pre += 8 * mdb_bytes;
-			stuffingBits -= 8 * mdb_bytes;
-			gfc.ResvSize -= 8 * mdb_bytes;
-			l3_side.main_data_begin -= mdb_bytes;
-		}
-		/* drain the rest into this frames ancillary data */
-		l3_side.resvDrain_post += stuffingBits;
-		gfc.ResvSize -= stuffingBits;
-	}
-}
-
-
-
-BitStream.EQ = function (a, b) {
-    return (Math.abs(a) > Math.abs(b)) ? (Math.abs((a) - (b)) <= (Math
-        .abs(a) * 1e-6))
-        : (Math.abs((a) - (b)) <= (Math.abs(b) * 1e-6));
-};
-
-BitStream.NEQ = function (a, b) {
-    return !BitStream.EQ(a, b);
-};
-
-function BitStream() {
-    var self = this;
-    var CRC16_POLYNOMIAL = 0x8005;
-
-    /*
-     * we work with ints, so when doing bit manipulation, we limit ourselves to
-     * MAX_LENGTH-2 just to be on the safe side
-     */
-    var MAX_LENGTH = 32;
-
-    //GainAnalysis ga;
-    //MPGLib mpg;
-    //Version ver;
-    //VBRTag vbr;
-    var ga = null;
-    var mpg = null;
-    var ver = null;
-    var vbr = null;
-
-    //public final void setModules(GainAnalysis ga, MPGLib mpg, Version ver,
-    //	VBRTag vbr) {
-
-    this.setModules = function (_ga, _mpg, _ver, _vbr) {
-        ga = _ga;
-        mpg = _mpg;
-        ver = _ver;
-        vbr = _vbr;
-    };
-
-    /**
-     * Bit stream buffer.
-     */
-    //private byte[] buf;
-    var buf = null;
-    /**
-     * Bit counter of bit stream.
-     */
-    var totbit = 0;
-    /**
-     * Pointer to top byte in buffer.
-     */
-    var bufByteIdx = 0;
-    /**
-     * Pointer to top bit of top byte in buffer.
-     */
-    var bufBitIdx = 0;
-
-    /**
-     * compute bitsperframe and mean_bits for a layer III frame
-     */
-    this.getframebits = function (gfp) {
-        var gfc = gfp.internal_flags;
-        var bit_rate;
-
-        /* get bitrate in kbps [?] */
-        if (gfc.bitrate_index != 0)
-            bit_rate = Tables.bitrate_table[gfp.version][gfc.bitrate_index];
-        else
-            bit_rate = gfp.brate;
-
-        /* main encoding routine toggles padding on and off */
-        /* one Layer3 Slot consists of 8 bits */
-        var bytes = 0 | (gfp.version + 1) * 72000 * bit_rate / gfp.out_samplerate + gfc.padding;
-        return 8 * bytes;
-    };
-
-    function putheader_bits(gfc) {
-        System.arraycopy(gfc.header[gfc.w_ptr].buf, 0, buf, bufByteIdx, gfc.sideinfo_len);
-        bufByteIdx += gfc.sideinfo_len;
-        totbit += gfc.sideinfo_len * 8;
-        gfc.w_ptr = (gfc.w_ptr + 1) & (LameInternalFlags.MAX_HEADER_BUF - 1);
-    }
-
-    /**
-     * write j bits into the bit stream
-     */
-    function putbits2(gfc, val, j) {
-
-        while (j > 0) {
-            var k;
-            if (bufBitIdx == 0) {
-                bufBitIdx = 8;
-                bufByteIdx++;
-                if (gfc.header[gfc.w_ptr].write_timing == totbit) {
-                    putheader_bits(gfc);
-                }
-                buf[bufByteIdx] = 0;
-            }
-
-            k = Math.min(j, bufBitIdx);
-            j -= k;
-
-            bufBitIdx -= k;
-
-            /* 32 too large on 32 bit machines */
-
-            buf[bufByteIdx] |= ((val >> j) << bufBitIdx);
-            totbit += k;
-        }
-    }
-
-    /**
-     * write j bits into the bit stream, ignoring frame headers
-     */
-    function putbits_noheaders(gfc, val, j) {
-
-        while (j > 0) {
-            var k;
-            if (bufBitIdx == 0) {
-                bufBitIdx = 8;
-                bufByteIdx++;
-                buf[bufByteIdx] = 0;
-            }
-
-            k = Math.min(j, bufBitIdx);
-            j -= k;
-
-            bufBitIdx -= k;
-
-            /* 32 too large on 32 bit machines */
-
-            buf[bufByteIdx] |= ((val >> j) << bufBitIdx);
-            totbit += k;
-        }
-    }
-
-    /**
-     * Some combinations of bitrate, Fs, and stereo make it impossible to stuff
-     * out a frame using just main_data, due to the limited number of bits to
-     * indicate main_data_length. In these situations, we put stuffing bits into
-     * the ancillary data...
-     */
-    function drain_into_ancillary(gfp, remainingBits) {
-        var gfc = gfp.internal_flags;
-        var i;
-
-        if (remainingBits >= 8) {
-            putbits2(gfc, 0x4c, 8);
-            remainingBits -= 8;
-        }
-        if (remainingBits >= 8) {
-            putbits2(gfc, 0x41, 8);
-            remainingBits -= 8;
-        }
-        if (remainingBits >= 8) {
-            putbits2(gfc, 0x4d, 8);
-            remainingBits -= 8;
-        }
-        if (remainingBits >= 8) {
-            putbits2(gfc, 0x45, 8);
-            remainingBits -= 8;
-        }
-
-        if (remainingBits >= 32) {
-            var version = ver.getLameShortVersion();
-            if (remainingBits >= 32)
-                for (i = 0; i < version.length && remainingBits >= 8; ++i) {
-                    remainingBits -= 8;
-                    putbits2(gfc, version.charAt(i), 8);
-                }
-        }
-
-        for (; remainingBits >= 1; remainingBits -= 1) {
-            putbits2(gfc, gfc.ancillary_flag, 1);
-            gfc.ancillary_flag ^= (!gfp.disable_reservoir ? 1 : 0);
-        }
-
-
-    }
-
-    /**
-     * write N bits into the header
-     */
-    function writeheader(gfc, val, j) {
-        var ptr = gfc.header[gfc.h_ptr].ptr;
-
-        while (j > 0) {
-            var k = Math.min(j, 8 - (ptr & 7));
-            j -= k;
-            /* >> 32 too large for 32 bit machines */
-
-            gfc.header[gfc.h_ptr].buf[ptr >> 3] |= ((val >> j)) << (8 - (ptr & 7) - k);
-            ptr += k;
-        }
-        gfc.header[gfc.h_ptr].ptr = ptr;
-    }
-
-    function CRC_update(value, crc) {
-        value <<= 8;
-        for (var i = 0; i < 8; i++) {
-            value <<= 1;
-            crc <<= 1;
-
-            if ((((crc ^ value) & 0x10000) != 0))
-                crc ^= CRC16_POLYNOMIAL;
-        }
-        return crc;
-    }
-
-    this.CRC_writeheader = function (gfc, header) {
-        var crc = 0xffff;
-        /* (jo) init crc16 for error_protection */
-
-        crc = CRC_update(header[2] & 0xff, crc);
-        crc = CRC_update(header[3] & 0xff, crc);
-        for (var i = 6; i < gfc.sideinfo_len; i++) {
-            crc = CRC_update(header[i] & 0xff, crc);
-        }
-
-        header[4] = (byte)(crc >> 8);
-        header[5] = (byte)(crc & 255);
-    };
-
-    function encodeSideInfo2(gfp, bitsPerFrame) {
-        var gfc = gfp.internal_flags;
-        var l3_side;
-        var gr, ch;
-
-        l3_side = gfc.l3_side;
-        gfc.header[gfc.h_ptr].ptr = 0;
-        Arrays.fill(gfc.header[gfc.h_ptr].buf, 0, gfc.sideinfo_len, 0);
-        if (gfp.out_samplerate < 16000)
-            writeheader(gfc, 0xffe, 12);
-        else
-            writeheader(gfc, 0xfff, 12);
-        writeheader(gfc, (gfp.version), 1);
-        writeheader(gfc, 4 - 3, 2);
-        writeheader(gfc, (!gfp.error_protection ? 1 : 0), 1);
-        writeheader(gfc, (gfc.bitrate_index), 4);
-        writeheader(gfc, (gfc.samplerate_index), 2);
-        writeheader(gfc, (gfc.padding), 1);
-        writeheader(gfc, (gfp.extension), 1);
-        writeheader(gfc, (gfp.mode.ordinal()), 2);
-        writeheader(gfc, (gfc.mode_ext), 2);
-        writeheader(gfc, (gfp.copyright), 1);
-        writeheader(gfc, (gfp.original), 1);
-        writeheader(gfc, (gfp.emphasis), 2);
-        if (gfp.error_protection) {
-            writeheader(gfc, 0, 16);
-            /* dummy */
-        }
-
-        if (gfp.version == 1) {
-            /* MPEG1 */
-            writeheader(gfc, (l3_side.main_data_begin), 9);
-
-            if (gfc.channels_out == 2)
-                writeheader(gfc, l3_side.private_bits, 3);
-            else
-                writeheader(gfc, l3_side.private_bits, 5);
-
-            for (ch = 0; ch < gfc.channels_out; ch++) {
-                var band;
-                for (band = 0; band < 4; band++) {
-                    writeheader(gfc, l3_side.scfsi[ch][band], 1);
-                }
-            }
-
-            for (gr = 0; gr < 2; gr++) {
-                for (ch = 0; ch < gfc.channels_out; ch++) {
-                    var gi = l3_side.tt[gr][ch];
-                    writeheader(gfc, gi.part2_3_length + gi.part2_length, 12);
-                    writeheader(gfc, gi.big_values / 2, 9);
-                    writeheader(gfc, gi.global_gain, 8);
-                    writeheader(gfc, gi.scalefac_compress, 4);
-
-                    if (gi.block_type != Encoder.NORM_TYPE) {
-                        writeheader(gfc, 1, 1);
-                        /* window_switching_flag */
-                        writeheader(gfc, gi.block_type, 2);
-                        writeheader(gfc, gi.mixed_block_flag, 1);
-
-                        if (gi.table_select[0] == 14)
-                            gi.table_select[0] = 16;
-                        writeheader(gfc, gi.table_select[0], 5);
-                        if (gi.table_select[1] == 14)
-                            gi.table_select[1] = 16;
-                        writeheader(gfc, gi.table_select[1], 5);
-
-                        writeheader(gfc, gi.subblock_gain[0], 3);
-                        writeheader(gfc, gi.subblock_gain[1], 3);
-                        writeheader(gfc, gi.subblock_gain[2], 3);
-                    } else {
-                        writeheader(gfc, 0, 1);
-                        /* window_switching_flag */
-                        if (gi.table_select[0] == 14)
-                            gi.table_select[0] = 16;
-                        writeheader(gfc, gi.table_select[0], 5);
-                        if (gi.table_select[1] == 14)
-                            gi.table_select[1] = 16;
-                        writeheader(gfc, gi.table_select[1], 5);
-                        if (gi.table_select[2] == 14)
-                            gi.table_select[2] = 16;
-                        writeheader(gfc, gi.table_select[2], 5);
-
-                        writeheader(gfc, gi.region0_count, 4);
-                        writeheader(gfc, gi.region1_count, 3);
-                    }
-                    writeheader(gfc, gi.preflag, 1);
-                    writeheader(gfc, gi.scalefac_scale, 1);
-                    writeheader(gfc, gi.count1table_select, 1);
-                }
-            }
-        } else {
-            /* MPEG2 */
-            writeheader(gfc, (l3_side.main_data_begin), 8);
-            writeheader(gfc, l3_side.private_bits, gfc.channels_out);
-
-            gr = 0;
-            for (ch = 0; ch < gfc.channels_out; ch++) {
-                var gi = l3_side.tt[gr][ch];
-                writeheader(gfc, gi.part2_3_length + gi.part2_length, 12);
-                writeheader(gfc, gi.big_values / 2, 9);
-                writeheader(gfc, gi.global_gain, 8);
-                writeheader(gfc, gi.scalefac_compress, 9);
-
-                if (gi.block_type != Encoder.NORM_TYPE) {
-                    writeheader(gfc, 1, 1);
-                    /* window_switching_flag */
-                    writeheader(gfc, gi.block_type, 2);
-                    writeheader(gfc, gi.mixed_block_flag, 1);
-
-                    if (gi.table_select[0] == 14)
-                        gi.table_select[0] = 16;
-                    writeheader(gfc, gi.table_select[0], 5);
-                    if (gi.table_select[1] == 14)
-                        gi.table_select[1] = 16;
-                    writeheader(gfc, gi.table_select[1], 5);
-
-                    writeheader(gfc, gi.subblock_gain[0], 3);
-                    writeheader(gfc, gi.subblock_gain[1], 3);
-                    writeheader(gfc, gi.subblock_gain[2], 3);
-                } else {
-                    writeheader(gfc, 0, 1);
-                    /* window_switching_flag */
-                    if (gi.table_select[0] == 14)
-                        gi.table_select[0] = 16;
-                    writeheader(gfc, gi.table_select[0], 5);
-                    if (gi.table_select[1] == 14)
-                        gi.table_select[1] = 16;
-                    writeheader(gfc, gi.table_select[1], 5);
-                    if (gi.table_select[2] == 14)
-                        gi.table_select[2] = 16;
-                    writeheader(gfc, gi.table_select[2], 5);
-
-                    writeheader(gfc, gi.region0_count, 4);
-                    writeheader(gfc, gi.region1_count, 3);
-                }
-
-                writeheader(gfc, gi.scalefac_scale, 1);
-                writeheader(gfc, gi.count1table_select, 1);
-            }
-        }
-
-        if (gfp.error_protection) {
-            /* (jo) error_protection: add crc16 information to header */
-            CRC_writeheader(gfc, gfc.header[gfc.h_ptr].buf);
-        }
-
-        {
-            var old = gfc.h_ptr;
-
-            gfc.h_ptr = (old + 1) & (LameInternalFlags.MAX_HEADER_BUF - 1);
-            gfc.header[gfc.h_ptr].write_timing = gfc.header[old].write_timing
-                + bitsPerFrame;
-
-            if (gfc.h_ptr == gfc.w_ptr) {
-                /* yikes! we are out of header buffer space */
-                System.err
-                    .println("Error: MAX_HEADER_BUF too small in bitstream.c \n");
-            }
-
-        }
-    }
-
-    function huffman_coder_count1(gfc, gi) {
-        /* Write count1 area */
-        var h = Tables.ht[gi.count1table_select + 32];
-        var i, bits = 0;
-
-        var ix = gi.big_values;
-        var xr = gi.big_values;
-
-        for (i = (gi.count1 - gi.big_values) / 4; i > 0; --i) {
-            var huffbits = 0;
-            var p = 0, v;
-
-            v = gi.l3_enc[ix + 0];
-            if (v != 0) {
-                p += 8;
-                if (gi.xr[xr + 0] < 0)
-                    huffbits++;
-            }
-
-            v = gi.l3_enc[ix + 1];
-            if (v != 0) {
-                p += 4;
-                huffbits *= 2;
-                if (gi.xr[xr + 1] < 0)
-                    huffbits++;
-            }
-
-            v = gi.l3_enc[ix + 2];
-            if (v != 0) {
-                p += 2;
-                huffbits *= 2;
-                if (gi.xr[xr + 2] < 0)
-                    huffbits++;
-            }
-
-            v = gi.l3_enc[ix + 3];
-            if (v != 0) {
-                p++;
-                huffbits *= 2;
-                if (gi.xr[xr + 3] < 0)
-                    huffbits++;
-            }
-
-            ix += 4;
-            xr += 4;
-            putbits2(gfc, huffbits + h.table[p], h.hlen[p]);
-            bits += h.hlen[p];
-        }
-        return bits;
-    }
-
-    /**
-     * Implements the pseudocode of page 98 of the IS
-     */
-    function Huffmancode(gfc, tableindex, start, end, gi) {
-        var h = Tables.ht[tableindex];
-        var bits = 0;
-
-        if (0 == tableindex)
-            return bits;
-
-        for (var i = start; i < end; i += 2) {
-            var cbits = 0;
-            var xbits = 0;
-            var linbits = h.xlen;
-            var xlen = h.xlen;
-            var ext = 0;
-            var x1 = gi.l3_enc[i];
-            var x2 = gi.l3_enc[i + 1];
-
-            if (x1 != 0) {
-                if (gi.xr[i] < 0)
-                    ext++;
-                cbits--;
-            }
-
-            if (tableindex > 15) {
-                /* use ESC-words */
-                if (x1 > 14) {
-                    var linbits_x1 = x1 - 15;
-                    ext |= linbits_x1 << 1;
-                    xbits = linbits;
-                    x1 = 15;
-                }
-
-                if (x2 > 14) {
-                    var linbits_x2 = x2 - 15;
-                    ext <<= linbits;
-                    ext |= linbits_x2;
-                    xbits += linbits;
-                    x2 = 15;
-                }
-                xlen = 16;
-            }
-
-            if (x2 != 0) {
-                ext <<= 1;
-                if (gi.xr[i + 1] < 0)
-                    ext++;
-                cbits--;
-            }
-
-
-            x1 = x1 * xlen + x2;
-            xbits -= cbits;
-            cbits += h.hlen[x1];
-
-
-            putbits2(gfc, h.table[x1], cbits);
-            putbits2(gfc, ext, xbits);
-            bits += cbits + xbits;
-        }
-        return bits;
-    }
-
-    /**
-     * Note the discussion of huffmancodebits() on pages 28 and 29 of the IS, as
-     * well as the definitions of the side information on pages 26 and 27.
-     */
-    function ShortHuffmancodebits(gfc, gi) {
-        var region1Start = 3 * gfc.scalefac_band.s[3];
-        if (region1Start > gi.big_values)
-            region1Start = gi.big_values;
-
-        /* short blocks do not have a region2 */
-        var bits = Huffmancode(gfc, gi.table_select[0], 0, region1Start, gi);
-        bits += Huffmancode(gfc, gi.table_select[1], region1Start,
-            gi.big_values, gi);
-        return bits;
-    }
-
-    function LongHuffmancodebits(gfc, gi) {
-        var bigvalues, bits;
-        var region1Start, region2Start;
-
-        bigvalues = gi.big_values;
-
-        var i = gi.region0_count + 1;
-        region1Start = gfc.scalefac_band.l[i];
-        i += gi.region1_count + 1;
-        region2Start = gfc.scalefac_band.l[i];
-
-        if (region1Start > bigvalues)
-            region1Start = bigvalues;
-
-        if (region2Start > bigvalues)
-            region2Start = bigvalues;
-
-        bits = Huffmancode(gfc, gi.table_select[0], 0, region1Start, gi);
-        bits += Huffmancode(gfc, gi.table_select[1], region1Start,
-            region2Start, gi);
-        bits += Huffmancode(gfc, gi.table_select[2], region2Start, bigvalues,
-            gi);
-        return bits;
-    }
-
-    function writeMainData(gfp) {
-        var gr, ch, sfb, data_bits, tot_bits = 0;
-        var gfc = gfp.internal_flags;
-        var l3_side = gfc.l3_side;
-
-        if (gfp.version == 1) {
-            /* MPEG 1 */
-            for (gr = 0; gr < 2; gr++) {
-                for (ch = 0; ch < gfc.channels_out; ch++) {
-                    var gi = l3_side.tt[gr][ch];
-                    var slen1 = Takehiro.slen1_tab[gi.scalefac_compress];
-                    var slen2 = Takehiro.slen2_tab[gi.scalefac_compress];
-                    data_bits = 0;
-                    for (sfb = 0; sfb < gi.sfbdivide; sfb++) {
-                        if (gi.scalefac[sfb] == -1)
-                            continue;
-                        /* scfsi is used */
-                        putbits2(gfc, gi.scalefac[sfb], slen1);
-                        data_bits += slen1;
-                    }
-                    for (; sfb < gi.sfbmax; sfb++) {
-                        if (gi.scalefac[sfb] == -1)
-                            continue;
-                        /* scfsi is used */
-                        putbits2(gfc, gi.scalefac[sfb], slen2);
-                        data_bits += slen2;
-                    }
-
-                    if (gi.block_type == Encoder.SHORT_TYPE) {
-                        data_bits += ShortHuffmancodebits(gfc, gi);
-                    } else {
-                        data_bits += LongHuffmancodebits(gfc, gi);
-                    }
-                    data_bits += huffman_coder_count1(gfc, gi);
-                    /* does bitcount in quantize.c agree with actual bit count? */
-                    tot_bits += data_bits;
-                }
-                /* for ch */
-            }
-            /* for gr */
-        } else {
-            /* MPEG 2 */
-            gr = 0;
-            for (ch = 0; ch < gfc.channels_out; ch++) {
-                var gi = l3_side.tt[gr][ch];
-                var i, sfb_partition, scale_bits = 0;
-                data_bits = 0;
-                sfb = 0;
-                sfb_partition = 0;
-
-                if (gi.block_type == Encoder.SHORT_TYPE) {
-                    for (; sfb_partition < 4; sfb_partition++) {
-                        var sfbs = gi.sfb_partition_table[sfb_partition] / 3;
-                        var slen = gi.slen[sfb_partition];
-                        for (i = 0; i < sfbs; i++, sfb++) {
-                            putbits2(gfc,
-                                Math.max(gi.scalefac[sfb * 3 + 0], 0), slen);
-                            putbits2(gfc,
-                                Math.max(gi.scalefac[sfb * 3 + 1], 0), slen);
-                            putbits2(gfc,
-                                Math.max(gi.scalefac[sfb * 3 + 2], 0), slen);
-                            scale_bits += 3 * slen;
-                        }
-                    }
-                    data_bits += ShortHuffmancodebits(gfc, gi);
-                } else {
-                    for (; sfb_partition < 4; sfb_partition++) {
-                        var sfbs = gi.sfb_partition_table[sfb_partition];
-                        var slen = gi.slen[sfb_partition];
-                        for (i = 0; i < sfbs; i++, sfb++) {
-                            putbits2(gfc, Math.max(gi.scalefac[sfb], 0), slen);
-                            scale_bits += slen;
-                        }
-                    }
-                    data_bits += LongHuffmancodebits(gfc, gi);
-                }
-                data_bits += huffman_coder_count1(gfc, gi);
-                /* does bitcount in quantize.c agree with actual bit count? */
-                tot_bits += scale_bits + data_bits;
-            }
-            /* for ch */
-        }
-        /* for gf */
-        return tot_bits;
-    }
-
-    /* main_data */
-
-    function TotalBytes() {
-        this.total = 0;
-    }
-
-    /*
-     * compute the number of bits required to flush all mp3 frames currently in
-     * the buffer. This should be the same as the reservoir size. Only call this
-     * routine between frames - i.e. only after all headers and data have been
-     * added to the buffer by format_bitstream().
-     *
-     * Also compute total_bits_output = size of mp3 buffer (including frame
-     * headers which may not have yet been send to the mp3 buffer) + number of
-     * bits needed to flush all mp3 frames.
-     *
-     * total_bytes_output is the size of the mp3 output buffer if
-     * lame_encode_flush_nogap() was called right now.
-     */
-    function compute_flushbits(gfp, total_bytes_output) {
-        var gfc = gfp.internal_flags;
-        var flushbits, remaining_headers;
-        var bitsPerFrame;
-        var last_ptr, first_ptr;
-        first_ptr = gfc.w_ptr;
-        /* first header to add to bitstream */
-        last_ptr = gfc.h_ptr - 1;
-        /* last header to add to bitstream */
-        if (last_ptr == -1)
-            last_ptr = LameInternalFlags.MAX_HEADER_BUF - 1;
-
-        /* add this many bits to bitstream so we can flush all headers */
-        flushbits = gfc.header[last_ptr].write_timing - totbit;
-        total_bytes_output.total = flushbits;
-
-        if (flushbits >= 0) {
-            /* if flushbits >= 0, some headers have not yet been written */
-            /* reduce flushbits by the size of the headers */
-            remaining_headers = 1 + last_ptr - first_ptr;
-            if (last_ptr < first_ptr)
-                remaining_headers = 1 + last_ptr - first_ptr
-                    + LameInternalFlags.MAX_HEADER_BUF;
-            flushbits -= remaining_headers * 8 * gfc.sideinfo_len;
-        }
-
-        /*
-         * finally, add some bits so that the last frame is complete these bits
-         * are not necessary to decode the last frame, but some decoders will
-         * ignore last frame if these bits are missing
-         */
-        bitsPerFrame = self.getframebits(gfp);
-        flushbits += bitsPerFrame;
-        total_bytes_output.total += bitsPerFrame;
-        /* round up: */
-        if ((total_bytes_output.total % 8) != 0)
-            total_bytes_output.total = 1 + (total_bytes_output.total / 8);
-        else
-            total_bytes_output.total = (total_bytes_output.total / 8);
-        total_bytes_output.total += bufByteIdx + 1;
-
-        if (flushbits < 0) {
-            System.err.println("strange error flushing buffer ... \n");
-        }
-        return flushbits;
-    }
-
-    this.flush_bitstream = function (gfp) {
-        var gfc = gfp.internal_flags;
-        var l3_side;
-        var flushbits;
-        var last_ptr = gfc.h_ptr - 1;
-        /* last header to add to bitstream */
-        if (last_ptr == -1)
-            last_ptr = LameInternalFlags.MAX_HEADER_BUF - 1;
-        l3_side = gfc.l3_side;
-
-        if ((flushbits = compute_flushbits(gfp, new TotalBytes())) < 0)
-            return;
-        drain_into_ancillary(gfp, flushbits);
-
-        /* check that the 100% of the last frame has been written to bitstream */
-
-        /*
-         * we have padded out all frames with ancillary data, which is the same
-         * as filling the bitreservoir with ancillary data, so :
-         */
-        gfc.ResvSize = 0;
-        l3_side.main_data_begin = 0;
-
-        /* save the ReplayGain value */
-        if (gfc.findReplayGain) {
-            var RadioGain = ga.GetTitleGain(gfc.rgdata);
-            gfc.RadioGain = Math.floor(RadioGain * 10.0 + 0.5) | 0;
-            /* round to nearest */
-        }
-
-        /* find the gain and scale change required for no clipping */
-        if (gfc.findPeakSample) {
-            gfc.noclipGainChange = Math.ceil(Math
-                        .log10(gfc.PeakSample / 32767.0) * 20.0 * 10.0) | 0;
-            /* round up */
-
-            if (gfc.noclipGainChange > 0) {
-                /* clipping occurs */
-                if (EQ(gfp.scale, 1.0) || EQ(gfp.scale, 0.0))
-                    gfc.noclipScale = (Math
-                        .floor((32767.0 / gfc.PeakSample) * 100.0) / 100.0);
-                /* round down */
-                else {
-                    /*
-                     * the user specified his own scaling factor. We could
-                     * suggest the scaling factor of
-                     * (32767.0/gfp.PeakSample)*(gfp.scale) but it's usually
-                     * very inaccurate. So we'd rather not advice him on the
-                     * scaling factor.
-                     */
-                    gfc.noclipScale = -1;
-                }
-            } else
-            /* no clipping */
-                gfc.noclipScale = -1;
-        }
-    };
-
-    this.add_dummy_byte = function (gfp, val, n) {
-        var gfc = gfp.internal_flags;
-        var i;
-
-        while (n-- > 0) {
-            putbits_noheaders(gfc, val, 8);
-
-            for (i = 0; i < LameInternalFlags.MAX_HEADER_BUF; ++i)
-                gfc.header[i].write_timing += 8;
-        }
-    };
-
-    /**
-     * This is called after a frame of audio has been quantized and coded. It
-     * will write the encoded audio to the bitstream. Note that from a layer3
-     * encoder's perspective the bit stream is primarily a series of main_data()
-     * blocks, with header and side information inserted at the proper locations
-     * to maintain framing. (See Figure A.7 in the IS).
-     */
-    this.format_bitstream = function (gfp) {
-        var gfc = gfp.internal_flags;
-        var l3_side;
-        l3_side = gfc.l3_side;
-
-        var bitsPerFrame = this.getframebits(gfp);
-        drain_into_ancillary(gfp, l3_side.resvDrain_pre);
-
-        encodeSideInfo2(gfp, bitsPerFrame);
-        var bits = 8 * gfc.sideinfo_len;
-        bits += writeMainData(gfp);
-        drain_into_ancillary(gfp, l3_side.resvDrain_post);
-        bits += l3_side.resvDrain_post;
-
-        l3_side.main_data_begin += (bitsPerFrame - bits) / 8;
-
-        /*
-         * compare number of bits needed to clear all buffered mp3 frames with
-         * what we think the resvsize is:
-         */
-        if (compute_flushbits(gfp, new TotalBytes()) != gfc.ResvSize) {
-            System.err.println("Internal buffer inconsistency. flushbits <> ResvSize");
-        }
-
-        /*
-         * compare main_data_begin for the next frame with what we think the
-         * resvsize is:
-         */
-        if ((l3_side.main_data_begin * 8) != gfc.ResvSize) {
-            System.err.printf("bit reservoir error: \n"
-                + "l3_side.main_data_begin: %d \n"
-                + "Resvoir size:             %d \n"
-                + "resv drain (post)         %d \n"
-                + "resv drain (pre)          %d \n"
-                + "header and sideinfo:      %d \n"
-                + "data bits:                %d \n"
-                + "total bits:               %d (remainder: %d) \n"
-                + "bitsperframe:             %d \n",
-                8 * l3_side.main_data_begin, gfc.ResvSize,
-                l3_side.resvDrain_post, l3_side.resvDrain_pre,
-                8 * gfc.sideinfo_len, bits - l3_side.resvDrain_post - 8
-                * gfc.sideinfo_len, bits, bits % 8, bitsPerFrame);
-
-            System.err.println("This is a fatal error.  It has several possible causes:");
-            System.err.println("90%%  LAME compiled with buggy version of gcc using advanced optimizations");
-            System.err.println(" 9%%  Your system is overclocked");
-            System.err.println(" 1%%  bug in LAME encoding library");
-
-            gfc.ResvSize = l3_side.main_data_begin * 8;
-        }
-        //;
-
-        if (totbit > 1000000000) {
-            /*
-             * to avoid totbit overflow, (at 8h encoding at 128kbs) lets reset
-             * bit counter
-             */
-            var i;
-            for (i = 0; i < LameInternalFlags.MAX_HEADER_BUF; ++i)
-                gfc.header[i].write_timing -= totbit;
-            totbit = 0;
-        }
-
-        return 0;
-    };
-
-    /**
-     * <PRE>
-     * copy data out of the internal MP3 bit buffer into a user supplied
-     *       unsigned char buffer.
-     *
-     *       mp3data=0      indicates data in buffer is an id3tags and VBR tags
-     *       mp3data=1      data is real mp3 frame data.
-     * </PRE>
-     */
-    this.copy_buffer = function (gfc, buffer, bufferPos, size, mp3data) {
-        var minimum = bufByteIdx + 1;
-        if (minimum <= 0)
-            return 0;
-        if (size != 0 && minimum > size) {
-            /* buffer is too small */
-            return -1;
-        }
-        System.arraycopy(buf, 0, buffer, bufferPos, minimum);
-        bufByteIdx = -1;
-        bufBitIdx = 0;
-
-        if (mp3data != 0) {
-            var crc = new_int(1);
-            crc[0] = gfc.nMusicCRC;
-            vbr.updateMusicCRC(crc, buffer, bufferPos, minimum);
-            gfc.nMusicCRC = crc[0];
-
-            /**
-             * sum number of bytes belonging to the mp3 stream this info will be
-             * written into the Xing/LAME header for seeking
-             */
-            if (minimum > 0) {
-                gfc.VBR_seek_table.nBytesWritten += minimum;
-            }
-
-            if (gfc.decode_on_the_fly) { /* decode the frame */
-                var pcm_buf = new_float_n([2, 1152]);
-                var mp3_in = minimum;
-                var samples_out = -1;
-                var i;
-
-                /* re-synthesis to pcm. Repeat until we get a samples_out=0 */
-                while (samples_out != 0) {
-
-                    samples_out = mpg.hip_decode1_unclipped(gfc.hip, buffer,
-                        bufferPos, mp3_in, pcm_buf[0], pcm_buf[1]);
-                    /*
-                     * samples_out = 0: need more data to decode samples_out =
-                     * -1: error. Lets assume 0 pcm output samples_out = number
-                     * of samples output
-                     */
-
-                    /*
-                     * set the lenght of the mp3 input buffer to zero, so that
-                     * in the next iteration of the loop we will be querying
-                     * mpglib about buffered data
-                     */
-                    mp3_in = 0;
-
-                    if (samples_out == -1) {
-                        /*
-                         * error decoding. Not fatal, but might screw up the
-                         * ReplayGain tag. What should we do? Ignore for now
-                         */
-                        samples_out = 0;
-                    }
-                    if (samples_out > 0) {
-                        /* process the PCM data */
-
-                        /*
-                         * this should not be possible, and indicates we have
-                         * overflown the pcm_buf buffer
-                         */
-
-                        if (gfc.findPeakSample) {
-                            for (i = 0; i < samples_out; i++) {
-                                if (pcm_buf[0][i] > gfc.PeakSample)
-                                    gfc.PeakSample = pcm_buf[0][i];
-                                else if (-pcm_buf[0][i] > gfc.PeakSample)
-                                    gfc.PeakSample = -pcm_buf[0][i];
-                            }
-                            if (gfc.channels_out > 1)
-                                for (i = 0; i < samples_out; i++) {
-                                    if (pcm_buf[1][i] > gfc.PeakSample)
-                                        gfc.PeakSample = pcm_buf[1][i];
-                                    else if (-pcm_buf[1][i] > gfc.PeakSample)
-                                        gfc.PeakSample = -pcm_buf[1][i];
-                                }
-                        }
-
-                        if (gfc.findReplayGain)
-                            if (ga.AnalyzeSamples(gfc.rgdata, pcm_buf[0], 0,
-                                    pcm_buf[1], 0, samples_out,
-                                    gfc.channels_out) == GainAnalysis.GAIN_ANALYSIS_ERROR)
-                                return -6;
-
-                    }
-                    /* if (samples_out>0) */
-                }
-                /* while (samples_out!=0) */
-            }
-            /* if (gfc.decode_on_the_fly) */
-
-        }
-        /* if (mp3data) */
-        return minimum;
-    };
-
-    this.init_bit_stream_w = function (gfc) {
-        buf = new_byte(Lame.LAME_MAXMP3BUFFER);
-
-        gfc.h_ptr = gfc.w_ptr = 0;
-        gfc.header[gfc.h_ptr].write_timing = 0;
-        bufByteIdx = -1;
-        bufBitIdx = 0;
-        totbit = 0;
-    };
-
-    // From machine.h
-
-
-}
-
-
-/**
- * A Vbr header may be present in the ancillary data field of the first frame of
- * an mp3 bitstream<BR>
- * The Vbr header (optionally) contains
- * <UL>
- * <LI>frames total number of audio frames in the bitstream
- * <LI>bytes total number of bytes in the bitstream
- * <LI>toc table of contents
- * </UL>
- *
- * toc (table of contents) gives seek points for random access.<BR>
- * The ith entry determines the seek point for i-percent duration.<BR>
- * seek point in bytes = (toc[i]/256.0) * total_bitstream_bytes<BR>
- * e.g. half duration seek point = (toc[50]/256.0) * total_bitstream_bytes
- */
-VBRTag.NUMTOCENTRIES = 100;
-VBRTag.MAXFRAMESIZE = 2880;
-
-function VBRTag() {
-
-    var lame;
-    var bs;
-    var v;
-
-    this.setModules = function (_lame, _bs, _v) {
-        lame = _lame;
-        bs = _bs;
-        v = _v;
-    };
-
-    var FRAMES_FLAG = 0x0001;
-    var BYTES_FLAG = 0x0002;
-    var TOC_FLAG = 0x0004;
-    var VBR_SCALE_FLAG = 0x0008;
-
-    var NUMTOCENTRIES = VBRTag.NUMTOCENTRIES;
-
-    /**
-     * (0xB40) the max freeformat 640 32kHz framesize.
-     */
-    var MAXFRAMESIZE = VBRTag.MAXFRAMESIZE;
-
-    /**
-     * <PRE>
-     *    4 bytes for Header Tag
-     *    4 bytes for Header Flags
-     *  100 bytes for entry (toc)
-     *    4 bytes for frame size
-     *    4 bytes for stream size
-     *    4 bytes for VBR scale. a VBR quality indicator: 0=best 100=worst
-     *   20 bytes for LAME tag.  for example, "LAME3.12 (beta 6)"
-     * ___________
-     *  140 bytes
-     * </PRE>
-     */
-    var VBRHEADERSIZE = (NUMTOCENTRIES + 4 + 4 + 4 + 4 + 4);
-
-    var LAMEHEADERSIZE = (VBRHEADERSIZE + 9 + 1 + 1 + 8
-    + 1 + 1 + 3 + 1 + 1 + 2 + 4 + 2 + 2);
-
-    /**
-     * The size of the Xing header MPEG-1, bit rate in kbps.
-     */
-    var XING_BITRATE1 = 128;
-    /**
-     * The size of the Xing header MPEG-2, bit rate in kbps.
-     */
-    var XING_BITRATE2 = 64;
-    /**
-     * The size of the Xing header MPEG-2.5, bit rate in kbps.
-     */
-    var XING_BITRATE25 = 32;
-
-    /**
-     * ISO-8859-1 charset for byte to string operations.
-     */
-    var ISO_8859_1 = null; //Charset.forName("ISO-8859-1");
-
-    /**
-     * VBR header magic string.
-     */
-    var VBRTag0 = "Xing";
-    /**
-     * VBR header magic string (VBR == VBRMode.vbr_off).
-     */
-    var VBRTag1 = "Info";
-
-    /**
-     * Lookup table for fast CRC-16 computation. Uses the polynomial
-     * x^16+x^15+x^2+1
-     */
-    var crc16Lookup = [0x0000, 0xC0C1, 0xC181, 0x0140,
-        0xC301, 0x03C0, 0x0280, 0xC241, 0xC601, 0x06C0, 0x0780, 0xC741,
-        0x0500, 0xC5C1, 0xC481, 0x0440, 0xCC01, 0x0CC0, 0x0D80, 0xCD41,
-        0x0F00, 0xCFC1, 0xCE81, 0x0E40, 0x0A00, 0xCAC1, 0xCB81, 0x0B40,
-        0xC901, 0x09C0, 0x0880, 0xC841, 0xD801, 0x18C0, 0x1980, 0xD941,
-        0x1B00, 0xDBC1, 0xDA81, 0x1A40, 0x1E00, 0xDEC1, 0xDF81, 0x1F40,
-        0xDD01, 0x1DC0, 0x1C80, 0xDC41, 0x1400, 0xD4C1, 0xD581, 0x1540,
-        0xD701, 0x17C0, 0x1680, 0xD641, 0xD201, 0x12C0, 0x1380, 0xD341,
-        0x1100, 0xD1C1, 0xD081, 0x1040, 0xF001, 0x30C0, 0x3180, 0xF141,
-        0x3300, 0xF3C1, 0xF281, 0x3240, 0x3600, 0xF6C1, 0xF781, 0x3740,
-        0xF501, 0x35C0, 0x3480, 0xF441, 0x3C00, 0xFCC1, 0xFD81, 0x3D40,
-        0xFF01, 0x3FC0, 0x3E80, 0xFE41, 0xFA01, 0x3AC0, 0x3B80, 0xFB41,
-        0x3900, 0xF9C1, 0xF881, 0x3840, 0x2800, 0xE8C1, 0xE981, 0x2940,
-        0xEB01, 0x2BC0, 0x2A80, 0xEA41, 0xEE01, 0x2EC0, 0x2F80, 0xEF41,
-        0x2D00, 0xEDC1, 0xEC81, 0x2C40, 0xE401, 0x24C0, 0x2580, 0xE541,
-        0x2700, 0xE7C1, 0xE681, 0x2640, 0x2200, 0xE2C1, 0xE381, 0x2340,
-        0xE101, 0x21C0, 0x2080, 0xE041, 0xA001, 0x60C0, 0x6180, 0xA141,
-        0x6300, 0xA3C1, 0xA281, 0x6240, 0x6600, 0xA6C1, 0xA781, 0x6740,
-        0xA501, 0x65C0, 0x6480, 0xA441, 0x6C00, 0xACC1, 0xAD81, 0x6D40,
-        0xAF01, 0x6FC0, 0x6E80, 0xAE41, 0xAA01, 0x6AC0, 0x6B80, 0xAB41,
-        0x6900, 0xA9C1, 0xA881, 0x6840, 0x7800, 0xB8C1, 0xB981, 0x7940,
-        0xBB01, 0x7BC0, 0x7A80, 0xBA41, 0xBE01, 0x7EC0, 0x7F80, 0xBF41,
-        0x7D00, 0xBDC1, 0xBC81, 0x7C40, 0xB401, 0x74C0, 0x7580, 0xB541,
-        0x7700, 0xB7C1, 0xB681, 0x7640, 0x7200, 0xB2C1, 0xB381, 0x7340,
-        0xB101, 0x71C0, 0x7080, 0xB041, 0x5000, 0x90C1, 0x9181, 0x5140,
-        0x9301, 0x53C0, 0x5280, 0x9241, 0x9601, 0x56C0, 0x5780, 0x9741,
-        0x5500, 0x95C1, 0x9481, 0x5440, 0x9C01, 0x5CC0, 0x5D80, 0x9D41,
-        0x5F00, 0x9FC1, 0x9E81, 0x5E40, 0x5A00, 0x9AC1, 0x9B81, 0x5B40,
-        0x9901, 0x59C0, 0x5880, 0x9841, 0x8801, 0x48C0, 0x4980, 0x8941,
-        0x4B00, 0x8BC1, 0x8A81, 0x4A40, 0x4E00, 0x8EC1, 0x8F81, 0x4F40,
-        0x8D01, 0x4DC0, 0x4C80, 0x8C41, 0x4400, 0x84C1, 0x8581, 0x4540,
-        0x8701, 0x47C0, 0x4680, 0x8641, 0x8201, 0x42C0, 0x4380, 0x8341,
-        0x4100, 0x81C1, 0x8081, 0x4040];
-
-    /***********************************************************************
-     * Robert Hegemann 2001-01-17
-     ***********************************************************************/
-
-    function addVbr(v, bitrate) {
-        v.nVbrNumFrames++;
-        v.sum += bitrate;
-        v.seen++;
-
-        if (v.seen < v.want) {
-            return;
-        }
-
-        if (v.pos < v.size) {
-            v.bag[v.pos] = v.sum;
-            v.pos++;
-            v.seen = 0;
-        }
-        if (v.pos == v.size) {
-            for (var i = 1; i < v.size; i += 2) {
-                v.bag[i / 2] = v.bag[i];
-            }
-            v.want *= 2;
-            v.pos /= 2;
-        }
-    }
-
-    function xingSeekTable(v, t) {
-        if (v.pos <= 0)
-            return;
-
-        for (var i = 1; i < NUMTOCENTRIES; ++i) {
-            var j = i / NUMTOCENTRIES, act, sum;
-            var indx = 0 | (Math.floor(j * v.pos));
-            if (indx > v.pos - 1)
-                indx = v.pos - 1;
-            act = v.bag[indx];
-            sum = v.sum;
-            var seek_point = 0 | (256. * act / sum);
-            if (seek_point > 255)
-                seek_point = 255;
-            t[i] = 0xff & seek_point;
-        }
-    }
-
-    /**
-     * Add VBR entry, used to fill the VBR TOC entries.
-     *
-     * @param gfp
-     *            global flags
-     */
-    this.addVbrFrame = function (gfp) {
-        var gfc = gfp.internal_flags;
-        var kbps = Tables.bitrate_table[gfp.version][gfc.bitrate_index];
-        addVbr(gfc.VBR_seek_table, kbps);
-    }
-
-    /**
-     * Read big endian integer (4-bytes) from header.
-     *
-     * @param buf
-     *            header containing the integer
-     * @param bufPos
-     *            offset into the header
-     * @return extracted integer
-     */
-    function extractInteger(buf, bufPos) {
-        var x = buf[bufPos + 0] & 0xff;
-        x <<= 8;
-        x |= buf[bufPos + 1] & 0xff;
-        x <<= 8;
-        x |= buf[bufPos + 2] & 0xff;
-        x <<= 8;
-        x |= buf[bufPos + 3] & 0xff;
-        return x;
-    }
-
-    /**
-     * Write big endian integer (4-bytes) in the header.
-     *
-     * @param buf
-     *            header to write the integer into
-     * @param bufPos
-     *            offset into the header
-     * @param value
-     *            integer value to write
-     */
-    function createInteger(buf, bufPos, value) {
-        buf[bufPos + 0] = 0xff & ((value >> 24) & 0xff);
-        buf[bufPos + 1] = 0xff & ((value >> 16) & 0xff);
-        buf[bufPos + 2] = 0xff & ((value >> 8) & 0xff);
-        buf[bufPos + 3] = 0xff & (value & 0xff);
-    }
-
-    /**
-     * Write big endian short (2-bytes) in the header.
-     *
-     * @param buf
-     *            header to write the integer into
-     * @param bufPos
-     *            offset into the header
-     * @param value
-     *            integer value to write
-     */
-    function createShort(buf, bufPos, value) {
-        buf[bufPos + 0] = 0xff & ((value >> 8) & 0xff);
-        buf[bufPos + 1] = 0xff & (value & 0xff);
-    }
-
-    /**
-     * Check for magic strings (Xing/Info).
-     *
-     * @param buf
-     *            header to check
-     * @param bufPos
-     *            header offset to check
-     * @return magic string found
-     */
-    function isVbrTag(buf, bufPos) {
-        return new String(buf, bufPos, VBRTag0.length(), ISO_8859_1)
-                .equals(VBRTag0)
-            || new String(buf, bufPos, VBRTag1.length(), ISO_8859_1)
-                .equals(VBRTag1);
-    }
-
-    function shiftInBitsValue(x, n, v) {
-        return 0xff & ((x << n) | (v & ~(-1 << n)));
-    }
-
-    /**
-     * Construct the MP3 header using the settings of the global flags.
-     *
-     * <img src="1000px-Mp3filestructure.svg.png">
-     *
-     * @param gfp
-     *            global flags
-     * @param buffer
-     *            header
-     */
-    function setLameTagFrameHeader(gfp, buffer) {
-        var gfc = gfp.internal_flags;
-
-        // MP3 Sync Word
-        buffer[0] = shiftInBitsValue(buffer[0], 8, 0xff);
-
-        buffer[1] = shiftInBitsValue(buffer[1], 3, 7);
-        buffer[1] = shiftInBitsValue(buffer[1], 1,
-            (gfp.out_samplerate < 16000) ? 0 : 1);
-        // Version
-        buffer[1] = shiftInBitsValue(buffer[1], 1, gfp.version);
-        // 01 == Layer 3
-        buffer[1] = shiftInBitsValue(buffer[1], 2, 4 - 3);
-        // Error protection
-        buffer[1] = shiftInBitsValue(buffer[1], 1, (!gfp.error_protection) ? 1
-            : 0);
-
-        // Bit rate
-        buffer[2] = shiftInBitsValue(buffer[2], 4, gfc.bitrate_index);
-        // Frequency
-        buffer[2] = shiftInBitsValue(buffer[2], 2, gfc.samplerate_index);
-        // Pad. Bit
-        buffer[2] = shiftInBitsValue(buffer[2], 1, 0);
-        // Priv. Bit
-        buffer[2] = shiftInBitsValue(buffer[2], 1, gfp.extension);
-
-        // Mode
-        buffer[3] = shiftInBitsValue(buffer[3], 2, gfp.mode.ordinal());
-        // Mode extension (Used with Joint Stereo)
-        buffer[3] = shiftInBitsValue(buffer[3], 2, gfc.mode_ext);
-        // Copy
-        buffer[3] = shiftInBitsValue(buffer[3], 1, gfp.copyright);
-        // Original
-        buffer[3] = shiftInBitsValue(buffer[3], 1, gfp.original);
-        // Emphasis
-        buffer[3] = shiftInBitsValue(buffer[3], 2, gfp.emphasis);
-
-        /* the default VBR header. 48 kbps layer III, no padding, no crc */
-        /* but sampling freq, mode and copyright/copy protection taken */
-        /* from first valid frame */
-        buffer[0] = 0xff;
-        var abyte = 0xff & (buffer[1] & 0xf1);
-        var bitrate;
-        if (1 == gfp.version) {
-            bitrate = XING_BITRATE1;
-        } else {
-            if (gfp.out_samplerate < 16000)
-                bitrate = XING_BITRATE25;
-            else
-                bitrate = XING_BITRATE2;
-        }
-
-        if (gfp.VBR == VbrMode.vbr_off)
-            bitrate = gfp.brate;
-
-        var bbyte;
-        if (gfp.free_format)
-            bbyte = 0x00;
-        else
-            bbyte = 0xff & (16 * lame.BitrateIndex(bitrate, gfp.version,
-                    gfp.out_samplerate));
-
-        /*
-         * Use as much of the info from the real frames in the Xing header:
-         * samplerate, channels, crc, etc...
-         */
-        if (gfp.version == 1) {
-            /* MPEG1 */
-            buffer[1] = 0xff & (abyte | 0x0a);
-            /* was 0x0b; */
-            abyte = 0xff & (buffer[2] & 0x0d);
-            /* AF keep also private bit */
-            buffer[2] = 0xff & (bbyte | abyte);
-            /* 64kbs MPEG1 frame */
-        } else {
-            /* MPEG2 */
-            buffer[1] = 0xff & (abyte | 0x02);
-            /* was 0x03; */
-            abyte = 0xff & (buffer[2] & 0x0d);
-            /* AF keep also private bit */
-            buffer[2] = 0xff & (bbyte | abyte);
-            /* 64kbs MPEG2 frame */
-        }
-    }
-
-    /**
-     * Get VBR tag information
-     *
-     * @param buf
-     *            header to analyze
-     * @param bufPos
-     *            offset into the header
-     * @return VBR tag data
-     */
-    this.getVbrTag = function (buf) {
-        var pTagData = new VBRTagData();
-        var bufPos = 0;
-
-        /* get Vbr header data */
-        pTagData.flags = 0;
-
-        /* get selected MPEG header data */
-        var hId = (buf[bufPos + 1] >> 3) & 1;
-        var hSrIndex = (buf[bufPos + 2] >> 2) & 3;
-        var hMode = (buf[bufPos + 3] >> 6) & 3;
-        var hBitrate = ((buf[bufPos + 2] >> 4) & 0xf);
-        hBitrate = Tables.bitrate_table[hId][hBitrate];
-
-        /* check for FFE syncword */
-        if ((buf[bufPos + 1] >> 4) == 0xE)
-            pTagData.samprate = Tables.samplerate_table[2][hSrIndex];
-        else
-            pTagData.samprate = Tables.samplerate_table[hId][hSrIndex];
-
-        /* determine offset of header */
-        if (hId != 0) {
-            /* mpeg1 */
-            if (hMode != 3)
-                bufPos += (32 + 4);
-            else
-                bufPos += (17 + 4);
-        } else {
-            /* mpeg2 */
-            if (hMode != 3)
-                bufPos += (17 + 4);
-            else
-                bufPos += (9 + 4);
-        }
-
-        if (!isVbrTag(buf, bufPos))
-            return null;
-
-        bufPos += 4;
-
-        pTagData.hId = hId;
-
-        /* get flags */
-        var head_flags = pTagData.flags = extractInteger(buf, bufPos);
-        bufPos += 4;
-
-        if ((head_flags & FRAMES_FLAG) != 0) {
-            pTagData.frames = extractInteger(buf, bufPos);
-            bufPos += 4;
-        }
-
-        if ((head_flags & BYTES_FLAG) != 0) {
-            pTagData.bytes = extractInteger(buf, bufPos);
-            bufPos += 4;
-        }
-
-        if ((head_flags & TOC_FLAG) != 0) {
-            if (pTagData.toc != null) {
-                for (var i = 0; i < NUMTOCENTRIES; i++)
-                    pTagData.toc[i] = buf[bufPos + i];
-            }
-            bufPos += NUMTOCENTRIES;
-        }
-
-        pTagData.vbrScale = -1;
-
-        if ((head_flags & VBR_SCALE_FLAG) != 0) {
-            pTagData.vbrScale = extractInteger(buf, bufPos);
-            bufPos += 4;
-        }
-
-        pTagData.headersize = ((hId + 1) * 72000 * hBitrate)
-            / pTagData.samprate;
-
-        bufPos += 21;
-        var encDelay = buf[bufPos + 0] << 4;
-        encDelay += buf[bufPos + 1] >> 4;
-        var encPadding = (buf[bufPos + 1] & 0x0F) << 8;
-        encPadding += buf[bufPos + 2] & 0xff;
-        /* check for reasonable values (this may be an old Xing header, */
-        /* not a INFO tag) */
-        if (encDelay < 0 || encDelay > 3000)
-            encDelay = -1;
-        if (encPadding < 0 || encPadding > 3000)
-            encPadding = -1;
-
-        pTagData.encDelay = encDelay;
-        pTagData.encPadding = encPadding;
-
-        /* success */
-        return pTagData;
-    }
-
-    /**
-     * Initializes the header
-     *
-     * @param gfp
-     *            global flags
-     */
-    this.InitVbrTag = function (gfp) {
-        var gfc = gfp.internal_flags;
-
-        /**
-         * <PRE>
-         * Xing VBR pretends to be a 48kbs layer III frame.  (at 44.1kHz).
-         * (at 48kHz they use 56kbs since 48kbs frame not big enough for
-         * table of contents)
-         * let's always embed Xing header inside a 64kbs layer III frame.
-         * this gives us enough room for a LAME version string too.
-         * size determined by sampling frequency (MPEG1)
-         * 32kHz:    216 bytes@48kbs    288bytes@ 64kbs
-         * 44.1kHz:  156 bytes          208bytes@64kbs     (+1 if padding = 1)
-         * 48kHz:    144 bytes          192
-         *
-         * MPEG 2 values are the same since the framesize and samplerate
-         * are each reduced by a factor of 2.
-         * </PRE>
-         */
-        var kbps_header;
-        if (1 == gfp.version) {
-            kbps_header = XING_BITRATE1;
-        } else {
-            if (gfp.out_samplerate < 16000)
-                kbps_header = XING_BITRATE25;
-            else
-                kbps_header = XING_BITRATE2;
-        }
-
-        if (gfp.VBR == VbrMode.vbr_off)
-            kbps_header = gfp.brate;
-
-        // make sure LAME Header fits into Frame
-        var totalFrameSize = ((gfp.version + 1) * 72000 * kbps_header)
-            / gfp.out_samplerate;
-        var headerSize = (gfc.sideinfo_len + LAMEHEADERSIZE);
-        gfc.VBR_seek_table.TotalFrameSize = totalFrameSize;
-        if (totalFrameSize < headerSize || totalFrameSize > MAXFRAMESIZE) {
-            /* disable tag, it wont fit */
-            gfp.bWriteVbrTag = false;
-            return;
-        }
-
-        gfc.VBR_seek_table.nVbrNumFrames = 0;
-        gfc.VBR_seek_table.nBytesWritten = 0;
-        gfc.VBR_seek_table.sum = 0;
-
-        gfc.VBR_seek_table.seen = 0;
-        gfc.VBR_seek_table.want = 1;
-        gfc.VBR_seek_table.pos = 0;
-
-        if (gfc.VBR_seek_table.bag == null) {
-            gfc.VBR_seek_table.bag = new int[400];
-            gfc.VBR_seek_table.size = 400;
-        }
-
-        // write dummy VBR tag of all 0's into bitstream
-        var buffer = new_byte(MAXFRAMESIZE);
-
-        setLameTagFrameHeader(gfp, buffer);
-        var n = gfc.VBR_seek_table.TotalFrameSize;
-        for (var i = 0; i < n; ++i) {
-            bs.add_dummy_byte(gfp, buffer[i] & 0xff, 1);
-        }
-    }
-
-    /**
-     * Fast CRC-16 computation (uses table crc16Lookup).
-     *
-     * @param value
-     * @param crc
-     * @return
-     */
-    function crcUpdateLookup(value, crc) {
-        var tmp = crc ^ value;
-        crc = (crc >> 8) ^ crc16Lookup[tmp & 0xff];
-        return crc;
-    }
-
-    this.updateMusicCRC = function (crc, buffer, bufferPos, size) {
-        for (var i = 0; i < size; ++i)
-            crc[0] = crcUpdateLookup(buffer[bufferPos + i], crc[0]);
-    }
-
-    /**
-     * Write LAME info: mini version + info on various switches used (Jonathan
-     * Dee 2001/08/31).
-     *
-     * @param gfp
-     *            global flags
-     * @param musicLength
-     *            music length
-     * @param streamBuffer
-     *            pointer to output buffer
-     * @param streamBufferPos
-     *            offset into the output buffer
-     * @param crc
-     *            computation of CRC-16 of Lame Tag so far (starting at frame
-     *            sync)
-     * @return number of bytes written to the stream
-     */
-    function putLameVBR(gfp, musicLength, streamBuffer, streamBufferPos, crc) {
-        var gfc = gfp.internal_flags;
-        var bytesWritten = 0;
-
-        /* encoder delay */
-        var encDelay = gfp.encoder_delay;
-        /* encoder padding */
-        var encPadding = gfp.encoder_padding;
-
-        /* recall: gfp.VBR_q is for example set by the switch -V */
-        /* gfp.quality by -q, -h, -f, etc */
-        var quality = (100 - 10 * gfp.VBR_q - gfp.quality);
-
-        var version = v.getLameVeryShortVersion();
-        var vbr;
-        var revision = 0x00;
-        var revMethod;
-        // numbering different in vbr_mode vs. Lame tag
-        var vbrTypeTranslator = [1, 5, 3, 2, 4, 0, 3];
-        var lowpass = 0 | (((gfp.lowpassfreq / 100.0) + .5) > 255 ? 255
-                : (gfp.lowpassfreq / 100.0) + .5);
-        var peakSignalAmplitude = 0;
-        var radioReplayGain = 0;
-        var audiophileReplayGain = 0;
-        var noiseShaping = gfp.internal_flags.noise_shaping;
-        var stereoMode = 0;
-        var nonOptimal = 0;
-        var sourceFreq = 0;
-        var misc = 0;
-        var musicCRC = 0;
-
-        // psy model type: Gpsycho or NsPsytune
-        var expNPsyTune = (gfp.exp_nspsytune & 1) != 0;
-        var safeJoint = (gfp.exp_nspsytune & 2) != 0;
-        var noGapMore = false;
-        var noGapPrevious = false;
-        var noGapCount = gfp.internal_flags.nogap_total;
-        var noGapCurr = gfp.internal_flags.nogap_current;
-
-        // 4 bits
-        var athType = gfp.ATHtype;
-        var flags = 0;
-
-        // vbr modes
-        var abrBitrate;
-        switch (gfp.VBR) {
-            case vbr_abr:
-                abrBitrate = gfp.VBR_mean_bitrate_kbps;
-                break;
-            case vbr_off:
-                abrBitrate = gfp.brate;
-                break;
-            default:
-                abrBitrate = gfp.VBR_min_bitrate_kbps;
-        }
-
-        // revision and vbr method
-        if (gfp.VBR.ordinal() < vbrTypeTranslator.length)
-            vbr = vbrTypeTranslator[gfp.VBR.ordinal()];
-        else
-            vbr = 0x00; // unknown
-
-        revMethod = 0x10 * revision + vbr;
-
-        // ReplayGain
-        if (gfc.findReplayGain) {
-            if (gfc.RadioGain > 0x1FE)
-                gfc.RadioGain = 0x1FE;
-            if (gfc.RadioGain < -0x1FE)
-                gfc.RadioGain = -0x1FE;
-
-            // set name code
-            radioReplayGain = 0x2000;
-            // set originator code to `determined automatically'
-            radioReplayGain |= 0xC00;
-
-            if (gfc.RadioGain >= 0) {
-                // set gain adjustment
-                radioReplayGain |= gfc.RadioGain;
-            } else {
-                // set the sign bit
-                radioReplayGain |= 0x200;
-                // set gain adjustment
-                radioReplayGain |= -gfc.RadioGain;
-            }
-        }
-
-        // peak sample
-        if (gfc.findPeakSample)
-            peakSignalAmplitude = Math
-                .abs(0 | ((( gfc.PeakSample) / 32767.0) * Math.pow(2, 23) + .5));
-
-        // nogap
-        if (noGapCount != -1) {
-            if (noGapCurr > 0)
-                noGapPrevious = true;
-
-            if (noGapCurr < noGapCount - 1)
-                noGapMore = true;
-        }
-
-        // flags
-        flags = athType + ((expNPsyTune ? 1 : 0) << 4)
-            + ((safeJoint ? 1 : 0) << 5) + ((noGapMore ? 1 : 0) << 6)
-            + ((noGapPrevious ? 1 : 0) << 7);
-
-        if (quality < 0)
-            quality = 0;
-
-        // stereo mode field (Intensity stereo is not implemented)
-        switch (gfp.mode) {
-            case MONO:
-                stereoMode = 0;
-                break;
-            case STEREO:
-                stereoMode = 1;
-                break;
-            case DUAL_CHANNEL:
-                stereoMode = 2;
-                break;
-            case JOINT_STEREO:
-                if (gfp.force_ms)
-                    stereoMode = 4;
-                else
-                    stereoMode = 3;
-                break;
-            case NOT_SET:
-            //$FALL-THROUGH$
-            default:
-                stereoMode = 7;
-                break;
-        }
-
-        if (gfp.in_samplerate <= 32000)
-            sourceFreq = 0x00;
-        else if (gfp.in_samplerate == 48000)
-            sourceFreq = 0x02;
-        else if (gfp.in_samplerate > 48000)
-            sourceFreq = 0x03;
-        else {
-            // default is 44100Hz
-            sourceFreq = 0x01;
-        }
-
-        // Check if the user overrided the default LAME behavior with some
-        // nasty options
-        if (gfp.short_blocks == ShortBlock.short_block_forced
-            || gfp.short_blocks == ShortBlock.short_block_dispensed
-            || ((gfp.lowpassfreq == -1) && (gfp.highpassfreq == -1)) || /* "-k" */
-            (gfp.scale_left < gfp.scale_right)
-            || (gfp.scale_left > gfp.scale_right)
-            || (gfp.disable_reservoir && gfp.brate < 320) || gfp.noATH
-            || gfp.ATHonly || (athType == 0) || gfp.in_samplerate <= 32000)
-            nonOptimal = 1;
-
-        misc = noiseShaping + (stereoMode << 2) + (nonOptimal << 5)
-            + (sourceFreq << 6);
-
-        musicCRC = gfc.nMusicCRC;
-
-        // Write all this information into the stream
-
-        createInteger(streamBuffer, streamBufferPos + bytesWritten, quality);
-        bytesWritten += 4;
-
-        for (var j = 0; j < 9; j++) {
-            streamBuffer[streamBufferPos + bytesWritten + j] = 0xff & version .charAt(j);
-        }
-        bytesWritten += 9;
-
-        streamBuffer[streamBufferPos + bytesWritten] = 0xff & revMethod;
-        bytesWritten++;
-
-        streamBuffer[streamBufferPos + bytesWritten] = 0xff & lowpass;
-        bytesWritten++;
-
-        createInteger(streamBuffer, streamBufferPos + bytesWritten,
-            peakSignalAmplitude);
-        bytesWritten += 4;
-
-        createShort(streamBuffer, streamBufferPos + bytesWritten,
-            radioReplayGain);
-        bytesWritten += 2;
-
-        createShort(streamBuffer, streamBufferPos + bytesWritten,
-            audiophileReplayGain);
-        bytesWritten += 2;
-
-        streamBuffer[streamBufferPos + bytesWritten] = 0xff & flags;
-        bytesWritten++;
-
-        if (abrBitrate >= 255)
-            streamBuffer[streamBufferPos + bytesWritten] = 0xFF;
-        else
-            streamBuffer[streamBufferPos + bytesWritten] = 0xff & abrBitrate;
-        bytesWritten++;
-
-        streamBuffer[streamBufferPos + bytesWritten] = 0xff & (encDelay >> 4);
-        streamBuffer[streamBufferPos + bytesWritten + 1] = 0xff & ((encDelay << 4) + (encPadding >> 8));
-        streamBuffer[streamBufferPos + bytesWritten + 2] = 0xff & encPadding;
-
-        bytesWritten += 3;
-
-        streamBuffer[streamBufferPos + bytesWritten] = 0xff & misc;
-        bytesWritten++;
-
-        // unused in rev0
-        streamBuffer[streamBufferPos + bytesWritten++] = 0;
-
-        createShort(streamBuffer, streamBufferPos + bytesWritten, gfp.preset);
-        bytesWritten += 2;
-
-        createInteger(streamBuffer, streamBufferPos + bytesWritten, musicLength);
-        bytesWritten += 4;
-
-        createShort(streamBuffer, streamBufferPos + bytesWritten, musicCRC);
-        bytesWritten += 2;
-
-        // Calculate tag CRC.... must be done here, since it includes previous
-        // information
-
-        for (var i = 0; i < bytesWritten; i++)
-            crc = crcUpdateLookup(streamBuffer[streamBufferPos + i], crc);
-
-        createShort(streamBuffer, streamBufferPos + bytesWritten, crc);
-        bytesWritten += 2;
-
-        return bytesWritten;
-    }
-
-    function skipId3v2(fpStream) {
-        // seek to the beginning of the stream
-        fpStream.seek(0);
-        // read 10 bytes in case there's an ID3 version 2 header here
-        var id3v2Header = new_byte(10);
-        fpStream.readFully(id3v2Header);
-        /* does the stream begin with the ID3 version 2 file identifier? */
-        var id3v2TagSize;
-        if (!new String(id3v2Header, "ISO-8859-1").startsWith("ID3")) {
-            /*
-             * the tag size (minus the 10-byte header) is encoded into four
-             * bytes where the most significant bit is clear in each byte
-             */
-            id3v2TagSize = (((id3v2Header[6] & 0x7f) << 21)
-                | ((id3v2Header[7] & 0x7f) << 14)
-                | ((id3v2Header[8] & 0x7f) << 7) | (id3v2Header[9] & 0x7f))
-                + id3v2Header.length;
-        } else {
-            /* no ID3 version 2 tag in this stream */
-            id3v2TagSize = 0;
-        }
-        return id3v2TagSize;
-    }
-
-    this.getLameTagFrame = function (gfp, buffer) {
-        var gfc = gfp.internal_flags;
-
-        if (!gfp.bWriteVbrTag) {
-            return 0;
-        }
-        if (gfc.Class_ID != Lame.LAME_ID) {
-            return 0;
-        }
-        if (gfc.VBR_seek_table.pos <= 0) {
-            return 0;
-        }
-        if (buffer.length < gfc.VBR_seek_table.TotalFrameSize) {
-            return gfc.VBR_seek_table.TotalFrameSize;
-        }
-
-        Arrays.fill(buffer, 0, gfc.VBR_seek_table.TotalFrameSize, 0);
-
-        // 4 bytes frame header
-        setLameTagFrameHeader(gfp, buffer);
-
-        // Create TOC entries
-        var toc = new_byte(NUMTOCENTRIES);
-
-        if (gfp.free_format) {
-            for (var i = 1; i < NUMTOCENTRIES; ++i)
-                toc[i] = 0xff & (255 * i / 100);
-        } else {
-            xingSeekTable(gfc.VBR_seek_table, toc);
-        }
-
-        // Start writing the tag after the zero frame
-        var streamIndex = gfc.sideinfo_len;
-        /**
-         * Note: Xing header specifies that Xing data goes in the ancillary data
-         * with NO ERROR PROTECTION. If error protecton in enabled, the Xing
-         * data still starts at the same offset, and now it is in sideinfo data
-         * block, and thus will not decode correctly by non-Xing tag aware
-         * players
-         */
-        if (gfp.error_protection)
-            streamIndex -= 2;
-
-        // Put Vbr tag
-        if (gfp.VBR == VbrMode.vbr_off) {
-            buffer[streamIndex++] = 0xff & VBRTag1.charAt(0);
-            buffer[streamIndex++] = 0xff & VBRTag1.charAt(1);
-            buffer[streamIndex++] = 0xff & VBRTag1.charAt(2);
-            buffer[streamIndex++] = 0xff & VBRTag1.charAt(3);
-
-        } else {
-            buffer[streamIndex++] = 0xff & VBRTag0.charAt(0);
-            buffer[streamIndex++] = 0xff & VBRTag0.charAt(1);
-            buffer[streamIndex++] = 0xff & VBRTag0.charAt(2);
-            buffer[streamIndex++] = 0xff & VBRTag0.charAt(3);
-        }
-
-        // Put header flags
-        createInteger(buffer, streamIndex, FRAMES_FLAG + BYTES_FLAG + TOC_FLAG
-            + VBR_SCALE_FLAG);
-        streamIndex += 4;
-
-        // Put Total Number of frames
-        createInteger(buffer, streamIndex, gfc.VBR_seek_table.nVbrNumFrames);
-        streamIndex += 4;
-
-        // Put total audio stream size, including Xing/LAME Header
-        var streamSize = (gfc.VBR_seek_table.nBytesWritten + gfc.VBR_seek_table.TotalFrameSize);
-        createInteger(buffer, streamIndex, 0 | streamSize);
-        streamIndex += 4;
-
-        /* Put TOC */
-        System.arraycopy(toc, 0, buffer, streamIndex, toc.length);
-        streamIndex += toc.length;
-
-        if (gfp.error_protection) {
-            // (jo) error_protection: add crc16 information to header
-            bs.CRC_writeheader(gfc, buffer);
-        }
-
-        // work out CRC so far: initially crc = 0
-        var crc = 0x00;
-        for (var i = 0; i < streamIndex; i++)
-            crc = crcUpdateLookup(buffer[i], crc);
-        // Put LAME VBR info
-        streamIndex += putLameVBR(gfp, streamSize, buffer, streamIndex, crc);
-
-        return gfc.VBR_seek_table.TotalFrameSize;
-    }
-
-    /**
-     * Write final VBR tag to the file.
-     *
-     * @param gfp
-     *            global flags
-     * @param stream
-     *            stream to add the VBR tag to
-     * @return 0 (OK), -1 else
-     * @throws IOException
-     *             I/O error
-     */
-    this.putVbrTag = function (gfp, stream) {
-        var gfc = gfp.internal_flags;
-
-        if (gfc.VBR_seek_table.pos <= 0)
-            return -1;
-
-        // Seek to end of file
-        stream.seek(stream.length());
-
-        // Get file size, abort if file has zero length.
-        if (stream.length() == 0)
-            return -1;
-
-        // The VBR tag may NOT be located at the beginning of the stream. If an
-        // ID3 version 2 tag was added, then it must be skipped to write the VBR
-        // tag data.
-        var id3v2TagSize = skipId3v2(stream);
-
-        // Seek to the beginning of the stream
-        stream.seek(id3v2TagSize);
-
-        var buffer = new_byte(MAXFRAMESIZE);
-        var bytes = getLameTagFrame(gfp, buffer);
-        if (bytes > buffer.length) {
-            return -1;
-        }
-
-        if (bytes < 1) {
-            return 0;
-        }
-
-        // Put it all to disk again
-        stream.write(buffer, 0, bytes);
-        // success
-        return 0;
-    }
-
-}
-
-function HuffCodeTab(len, max, tab, hl) {
-    this.xlen = len;
-    this.linmax = max;
-    this.table = tab;
-    this.hlen = hl;
-}
-
-var Tables = {};
-
-
-Tables.t1HB = [
-    1, 1,
-    1, 0
-];
-
-Tables.t2HB = [
-    1, 2, 1,
-    3, 1, 1,
-    3, 2, 0
-];
-
-Tables.t3HB = [
-    3, 2, 1,
-    1, 1, 1,
-    3, 2, 0
-];
-
-Tables.t5HB = [
-    1, 2, 6, 5,
-    3, 1, 4, 4,
-    7, 5, 7, 1,
-    6, 1, 1, 0
-];
-
-Tables.t6HB = [
-    7, 3, 5, 1,
-    6, 2, 3, 2,
-    5, 4, 4, 1,
-    3, 3, 2, 0
-];
-
-Tables.t7HB = [
-    1, 2, 10, 19, 16, 10,
-    3, 3, 7, 10, 5, 3,
-    11, 4, 13, 17, 8, 4,
-    12, 11, 18, 15, 11, 2,
-    7, 6, 9, 14, 3, 1,
-    6, 4, 5, 3, 2, 0
-];
-
-Tables.t8HB = [
-    3, 4, 6, 18, 12, 5,
-    5, 1, 2, 16, 9, 3,
-    7, 3, 5, 14, 7, 3,
-    19, 17, 15, 13, 10, 4,
-    13, 5, 8, 11, 5, 1,
-    12, 4, 4, 1, 1, 0
-];
-
-Tables.t9HB = [
-    7, 5, 9, 14, 15, 7,
-    6, 4, 5, 5, 6, 7,
-    7, 6, 8, 8, 8, 5,
-    15, 6, 9, 10, 5, 1,
-    11, 7, 9, 6, 4, 1,
-    14, 4, 6, 2, 6, 0
-];
-
-Tables.t10HB = [
-    1, 2, 10, 23, 35, 30, 12, 17,
-    3, 3, 8, 12, 18, 21, 12, 7,
-    11, 9, 15, 21, 32, 40, 19, 6,
-    14, 13, 22, 34, 46, 23, 18, 7,
-    20, 19, 33, 47, 27, 22, 9, 3,
-    31, 22, 41, 26, 21, 20, 5, 3,
-    14, 13, 10, 11, 16, 6, 5, 1,
-    9, 8, 7, 8, 4, 4, 2, 0
-];
-
-Tables.t11HB = [
-    3, 4, 10, 24, 34, 33, 21, 15,
-    5, 3, 4, 10, 32, 17, 11, 10,
-    11, 7, 13, 18, 30, 31, 20, 5,
-    25, 11, 19, 59, 27, 18, 12, 5,
-    35, 33, 31, 58, 30, 16, 7, 5,
-    28, 26, 32, 19, 17, 15, 8, 14,
-    14, 12, 9, 13, 14, 9, 4, 1,
-    11, 4, 6, 6, 6, 3, 2, 0
-];
-
-Tables.t12HB = [
-    9, 6, 16, 33, 41, 39, 38, 26,
-    7, 5, 6, 9, 23, 16, 26, 11,
-    17, 7, 11, 14, 21, 30, 10, 7,
-    17, 10, 15, 12, 18, 28, 14, 5,
-    32, 13, 22, 19, 18, 16, 9, 5,
-    40, 17, 31, 29, 17, 13, 4, 2,
-    27, 12, 11, 15, 10, 7, 4, 1,
-    27, 12, 8, 12, 6, 3, 1, 0
-];
-
-Tables.t13HB = [
-    1, 5, 14, 21, 34, 51, 46, 71, 42, 52, 68, 52, 67, 44, 43, 19,
-    3, 4, 12, 19, 31, 26, 44, 33, 31, 24, 32, 24, 31, 35, 22, 14,
-    15, 13, 23, 36, 59, 49, 77, 65, 29, 40, 30, 40, 27, 33, 42, 16,
-    22, 20, 37, 61, 56, 79, 73, 64, 43, 76, 56, 37, 26, 31, 25, 14,
-    35, 16, 60, 57, 97, 75, 114, 91, 54, 73, 55, 41, 48, 53, 23, 24,
-    58, 27, 50, 96, 76, 70, 93, 84, 77, 58, 79, 29, 74, 49, 41, 17,
-    47, 45, 78, 74, 115, 94, 90, 79, 69, 83, 71, 50, 59, 38, 36, 15,
-    72, 34, 56, 95, 92, 85, 91, 90, 86, 73, 77, 65, 51, 44, 43, 42,
-    43, 20, 30, 44, 55, 78, 72, 87, 78, 61, 46, 54, 37, 30, 20, 16,
-    53, 25, 41, 37, 44, 59, 54, 81, 66, 76, 57, 54, 37, 18, 39, 11,
-    35, 33, 31, 57, 42, 82, 72, 80, 47, 58, 55, 21, 22, 26, 38, 22,
-    53, 25, 23, 38, 70, 60, 51, 36, 55, 26, 34, 23, 27, 14, 9, 7,
-    34, 32, 28, 39, 49, 75, 30, 52, 48, 40, 52, 28, 18, 17, 9, 5,
-    45, 21, 34, 64, 56, 50, 49, 45, 31, 19, 12, 15, 10, 7, 6, 3,
-    48, 23, 20, 39, 36, 35, 53, 21, 16, 23, 13, 10, 6, 1, 4, 2,
-    16, 15, 17, 27, 25, 20, 29, 11, 17, 12, 16, 8, 1, 1, 0, 1
-];
-
-Tables.t15HB = [
-    7, 12, 18, 53, 47, 76, 124, 108, 89, 123, 108, 119, 107, 81, 122, 63,
-    13, 5, 16, 27, 46, 36, 61, 51, 42, 70, 52, 83, 65, 41, 59, 36,
-    19, 17, 15, 24, 41, 34, 59, 48, 40, 64, 50, 78, 62, 80, 56, 33,
-    29, 28, 25, 43, 39, 63, 55, 93, 76, 59, 93, 72, 54, 75, 50, 29,
-    52, 22, 42, 40, 67, 57, 95, 79, 72, 57, 89, 69, 49, 66, 46, 27,
-    77, 37, 35, 66, 58, 52, 91, 74, 62, 48, 79, 63, 90, 62, 40, 38,
-    125, 32, 60, 56, 50, 92, 78, 65, 55, 87, 71, 51, 73, 51, 70, 30,
-    109, 53, 49, 94, 88, 75, 66, 122, 91, 73, 56, 42, 64, 44, 21, 25,
-    90, 43, 41, 77, 73, 63, 56, 92, 77, 66, 47, 67, 48, 53, 36, 20,
-    71, 34, 67, 60, 58, 49, 88, 76, 67, 106, 71, 54, 38, 39, 23, 15,
-    109, 53, 51, 47, 90, 82, 58, 57, 48, 72, 57, 41, 23, 27, 62, 9,
-    86, 42, 40, 37, 70, 64, 52, 43, 70, 55, 42, 25, 29, 18, 11, 11,
-    118, 68, 30, 55, 50, 46, 74, 65, 49, 39, 24, 16, 22, 13, 14, 7,
-    91, 44, 39, 38, 34, 63, 52, 45, 31, 52, 28, 19, 14, 8, 9, 3,
-    123, 60, 58, 53, 47, 43, 32, 22, 37, 24, 17, 12, 15, 10, 2, 1,
-    71, 37, 34, 30, 28, 20, 17, 26, 21, 16, 10, 6, 8, 6, 2, 0
-];
-
-Tables.t16HB = [
-    1, 5, 14, 44, 74, 63, 110, 93, 172, 149, 138, 242, 225, 195, 376, 17,
-    3, 4, 12, 20, 35, 62, 53, 47, 83, 75, 68, 119, 201, 107, 207, 9,
-    15, 13, 23, 38, 67, 58, 103, 90, 161, 72, 127, 117, 110, 209, 206, 16,
-    45, 21, 39, 69, 64, 114, 99, 87, 158, 140, 252, 212, 199, 387, 365, 26,
-    75, 36, 68, 65, 115, 101, 179, 164, 155, 264, 246, 226, 395, 382, 362, 9,
-    66, 30, 59, 56, 102, 185, 173, 265, 142, 253, 232, 400, 388, 378, 445, 16,
-    111, 54, 52, 100, 184, 178, 160, 133, 257, 244, 228, 217, 385, 366, 715, 10,
-    98, 48, 91, 88, 165, 157, 148, 261, 248, 407, 397, 372, 380, 889, 884, 8,
-    85, 84, 81, 159, 156, 143, 260, 249, 427, 401, 392, 383, 727, 713, 708, 7,
-    154, 76, 73, 141, 131, 256, 245, 426, 406, 394, 384, 735, 359, 710, 352, 11,
-    139, 129, 67, 125, 247, 233, 229, 219, 393, 743, 737, 720, 885, 882, 439, 4,
-    243, 120, 118, 115, 227, 223, 396, 746, 742, 736, 721, 712, 706, 223, 436, 6,
-    202, 224, 222, 218, 216, 389, 386, 381, 364, 888, 443, 707, 440, 437, 1728, 4,
-    747, 211, 210, 208, 370, 379, 734, 723, 714, 1735, 883, 877, 876, 3459, 865, 2,
-    377, 369, 102, 187, 726, 722, 358, 711, 709, 866, 1734, 871, 3458, 870, 434, 0,
-    12, 10, 7, 11, 10, 17, 11, 9, 13, 12, 10, 7, 5, 3, 1, 3
-];
-
-Tables.t24HB = [
-    15, 13, 46, 80, 146, 262, 248, 434, 426, 669, 653, 649, 621, 517, 1032, 88,
-    14, 12, 21, 38, 71, 130, 122, 216, 209, 198, 327, 345, 319, 297, 279, 42,
-    47, 22, 41, 74, 68, 128, 120, 221, 207, 194, 182, 340, 315, 295, 541, 18,
-    81, 39, 75, 70, 134, 125, 116, 220, 204, 190, 178, 325, 311, 293, 271, 16,
-    147, 72, 69, 135, 127, 118, 112, 210, 200, 188, 352, 323, 306, 285, 540, 14,
-    263, 66, 129, 126, 119, 114, 214, 202, 192, 180, 341, 317, 301, 281, 262, 12,
-    249, 123, 121, 117, 113, 215, 206, 195, 185, 347, 330, 308, 291, 272, 520, 10,
-    435, 115, 111, 109, 211, 203, 196, 187, 353, 332, 313, 298, 283, 531, 381, 17,
-    427, 212, 208, 205, 201, 193, 186, 177, 169, 320, 303, 286, 268, 514, 377, 16,
-    335, 199, 197, 191, 189, 181, 174, 333, 321, 305, 289, 275, 521, 379, 371, 11,
-    668, 184, 183, 179, 175, 344, 331, 314, 304, 290, 277, 530, 383, 373, 366, 10,
-    652, 346, 171, 168, 164, 318, 309, 299, 287, 276, 263, 513, 375, 368, 362, 6,
-    648, 322, 316, 312, 307, 302, 292, 284, 269, 261, 512, 376, 370, 364, 359, 4,
-    620, 300, 296, 294, 288, 282, 273, 266, 515, 380, 374, 369, 365, 361, 357, 2,
-    1033, 280, 278, 274, 267, 264, 259, 382, 378, 372, 367, 363, 360, 358, 356, 0,
-    43, 20, 19, 17, 15, 13, 11, 9, 7, 6, 4, 7, 5, 3, 1, 3
-];
-
-Tables.t32HB = [
-    1 << 0, 5 << 1, 4 << 1, 5 << 2, 6 << 1, 5 << 2, 4 << 2, 4 << 3,
-    7 << 1, 3 << 2, 6 << 2, 0 << 3, 7 << 2, 2 << 3, 3 << 3, 1 << 4
-];
-
-Tables.t33HB = [
-    15 << 0, 14 << 1, 13 << 1, 12 << 2, 11 << 1, 10 << 2, 9 << 2, 8 << 3,
-    7 << 1, 6 << 2, 5 << 2, 4 << 3, 3 << 2, 2 << 3, 1 << 3, 0 << 4
-];
-
-Tables.t1l = [
-    1, 4,
-    3, 5
-];
-
-Tables.t2l = [
-    1, 4, 7,
-    4, 5, 7,
-    6, 7, 8
-];
-
-Tables.t3l = [
-    2, 3, 7,
-    4, 4, 7,
-    6, 7, 8
-];
-
-Tables.t5l = [
-    1, 4, 7, 8,
-    4, 5, 8, 9,
-    7, 8, 9, 10,
-    8, 8, 9, 10
-];
-
-Tables.t6l = [
-    3, 4, 6, 8,
-    4, 4, 6, 7,
-    5, 6, 7, 8,
-    7, 7, 8, 9
-];
-
-Tables.t7l = [
-    1, 4, 7, 9, 9, 10,
-    4, 6, 8, 9, 9, 10,
-    7, 7, 9, 10, 10, 11,
-    8, 9, 10, 11, 11, 11,
-    8, 9, 10, 11, 11, 12,
-    9, 10, 11, 12, 12, 12
-];
-
-Tables.t8l = [
-    2, 4, 7, 9, 9, 10,
-    4, 4, 6, 10, 10, 10,
-    7, 6, 8, 10, 10, 11,
-    9, 10, 10, 11, 11, 12,
-    9, 9, 10, 11, 12, 12,
-    10, 10, 11, 11, 13, 13
-];
-
-Tables.t9l = [
-    3, 4, 6, 7, 9, 10,
-    4, 5, 6, 7, 8, 10,
-    5, 6, 7, 8, 9, 10,
-    7, 7, 8, 9, 9, 10,
-    8, 8, 9, 9, 10, 11,
-    9, 9, 10, 10, 11, 11
-];
-
-Tables.t10l = [
-    1, 4, 7, 9, 10, 10, 10, 11,
-    4, 6, 8, 9, 10, 11, 10, 10,
-    7, 8, 9, 10, 11, 12, 11, 11,
-    8, 9, 10, 11, 12, 12, 11, 12,
-    9, 10, 11, 12, 12, 12, 12, 12,
-    10, 11, 12, 12, 13, 13, 12, 13,
-    9, 10, 11, 12, 12, 12, 13, 13,
-    10, 10, 11, 12, 12, 13, 13, 13
-];
-
-Tables.t11l = [
-    2, 4, 6, 8, 9, 10, 9, 10,
-    4, 5, 6, 8, 10, 10, 9, 10,
-    6, 7, 8, 9, 10, 11, 10, 10,
-    8, 8, 9, 11, 10, 12, 10, 11,
-    9, 10, 10, 11, 11, 12, 11, 12,
-    9, 10, 11, 12, 12, 13, 12, 13,
-    9, 9, 9, 10, 11, 12, 12, 12,
-    9, 9, 10, 11, 12, 12, 12, 12
-];
-
-Tables.t12l = [
-    4, 4, 6, 8, 9, 10, 10, 10,
-    4, 5, 6, 7, 9, 9, 10, 10,
-    6, 6, 7, 8, 9, 10, 9, 10,
-    7, 7, 8, 8, 9, 10, 10, 10,
-    8, 8, 9, 9, 10, 10, 10, 11,
-    9, 9, 10, 10, 10, 11, 10, 11,
-    9, 9, 9, 10, 10, 11, 11, 12,
-    10, 10, 10, 11, 11, 11, 11, 12
-];
-
-Tables.t13l = [
-    1, 5, 7, 8, 9, 10, 10, 11, 10, 11, 12, 12, 13, 13, 14, 14,
-    4, 6, 8, 9, 10, 10, 11, 11, 11, 11, 12, 12, 13, 14, 14, 14,
-    7, 8, 9, 10, 11, 11, 12, 12, 11, 12, 12, 13, 13, 14, 15, 15,
-    8, 9, 10, 11, 11, 12, 12, 12, 12, 13, 13, 13, 13, 14, 15, 15,
-    9, 9, 11, 11, 12, 12, 13, 13, 12, 13, 13, 14, 14, 15, 15, 16,
-    10, 10, 11, 12, 12, 12, 13, 13, 13, 13, 14, 13, 15, 15, 16, 16,
-    10, 11, 12, 12, 13, 13, 13, 13, 13, 14, 14, 14, 15, 15, 16, 16,
-    11, 11, 12, 13, 13, 13, 14, 14, 14, 14, 15, 15, 15, 16, 18, 18,
-    10, 10, 11, 12, 12, 13, 13, 14, 14, 14, 14, 15, 15, 16, 17, 17,
-    11, 11, 12, 12, 13, 13, 13, 15, 14, 15, 15, 16, 16, 16, 18, 17,
-    11, 12, 12, 13, 13, 14, 14, 15, 14, 15, 16, 15, 16, 17, 18, 19,
-    12, 12, 12, 13, 14, 14, 14, 14, 15, 15, 15, 16, 17, 17, 17, 18,
-    12, 13, 13, 14, 14, 15, 14, 15, 16, 16, 17, 17, 17, 18, 18, 18,
-    13, 13, 14, 15, 15, 15, 16, 16, 16, 16, 16, 17, 18, 17, 18, 18,
-    14, 14, 14, 15, 15, 15, 17, 16, 16, 19, 17, 17, 17, 19, 18, 18,
-    13, 14, 15, 16, 16, 16, 17, 16, 17, 17, 18, 18, 21, 20, 21, 18
-];
-
-Tables.t15l = [
-    3, 5, 6, 8, 8, 9, 10, 10, 10, 11, 11, 12, 12, 12, 13, 14,
-    5, 5, 7, 8, 9, 9, 10, 10, 10, 11, 11, 12, 12, 12, 13, 13,
-    6, 7, 7, 8, 9, 9, 10, 10, 10, 11, 11, 12, 12, 13, 13, 13,
-    7, 8, 8, 9, 9, 10, 10, 11, 11, 11, 12, 12, 12, 13, 13, 13,
-    8, 8, 9, 9, 10, 10, 11, 11, 11, 11, 12, 12, 12, 13, 13, 13,
-    9, 9, 9, 10, 10, 10, 11, 11, 11, 11, 12, 12, 13, 13, 13, 14,
-    10, 9, 10, 10, 10, 11, 11, 11, 11, 12, 12, 12, 13, 13, 14, 14,
-    10, 10, 10, 11, 11, 11, 11, 12, 12, 12, 12, 12, 13, 13, 13, 14,
-    10, 10, 10, 11, 11, 11, 11, 12, 12, 12, 12, 13, 13, 14, 14, 14,
-    10, 10, 11, 11, 11, 11, 12, 12, 12, 13, 13, 13, 13, 14, 14, 14,
-    11, 11, 11, 11, 12, 12, 12, 12, 12, 13, 13, 13, 13, 14, 15, 14,
-    11, 11, 11, 11, 12, 12, 12, 12, 13, 13, 13, 13, 14, 14, 14, 15,
-    12, 12, 11, 12, 12, 12, 13, 13, 13, 13, 13, 13, 14, 14, 15, 15,
-    12, 12, 12, 12, 12, 13, 13, 13, 13, 14, 14, 14, 14, 14, 15, 15,
-    13, 13, 13, 13, 13, 13, 13, 13, 14, 14, 14, 14, 15, 15, 14, 15,
-    13, 13, 13, 13, 13, 13, 13, 14, 14, 14, 14, 14, 15, 15, 15, 15
-];
-
-Tables.t16_5l = [
-    1, 5, 7, 9, 10, 10, 11, 11, 12, 12, 12, 13, 13, 13, 14, 11,
-    4, 6, 8, 9, 10, 11, 11, 11, 12, 12, 12, 13, 14, 13, 14, 11,
-    7, 8, 9, 10, 11, 11, 12, 12, 13, 12, 13, 13, 13, 14, 14, 12,
-    9, 9, 10, 11, 11, 12, 12, 12, 13, 13, 14, 14, 14, 15, 15, 13,
-    10, 10, 11, 11, 12, 12, 13, 13, 13, 14, 14, 14, 15, 15, 15, 12,
-    10, 10, 11, 11, 12, 13, 13, 14, 13, 14, 14, 15, 15, 15, 16, 13,
-    11, 11, 11, 12, 13, 13, 13, 13, 14, 14, 14, 14, 15, 15, 16, 13,
-    11, 11, 12, 12, 13, 13, 13, 14, 14, 15, 15, 15, 15, 17, 17, 13,
-    11, 12, 12, 13, 13, 13, 14, 14, 15, 15, 15, 15, 16, 16, 16, 13,
-    12, 12, 12, 13, 13, 14, 14, 15, 15, 15, 15, 16, 15, 16, 15, 14,
-    12, 13, 12, 13, 14, 14, 14, 14, 15, 16, 16, 16, 17, 17, 16, 13,
-    13, 13, 13, 13, 14, 14, 15, 16, 16, 16, 16, 16, 16, 15, 16, 14,
-    13, 14, 14, 14, 14, 15, 15, 15, 15, 17, 16, 16, 16, 16, 18, 14,
-    15, 14, 14, 14, 15, 15, 16, 16, 16, 18, 17, 17, 17, 19, 17, 14,
-    14, 15, 13, 14, 16, 16, 15, 16, 16, 17, 18, 17, 19, 17, 16, 14,
-    11, 11, 11, 12, 12, 13, 13, 13, 14, 14, 14, 14, 14, 14, 14, 12
-];
-
-Tables.t16l = [
-    1, 5, 7, 9, 10, 10, 11, 11, 12, 12, 12, 13, 13, 13, 14, 10,
-    4, 6, 8, 9, 10, 11, 11, 11, 12, 12, 12, 13, 14, 13, 14, 10,
-    7, 8, 9, 10, 11, 11, 12, 12, 13, 12, 13, 13, 13, 14, 14, 11,
-    9, 9, 10, 11, 11, 12, 12, 12, 13, 13, 14, 14, 14, 15, 15, 12,
-    10, 10, 11, 11, 12, 12, 13, 13, 13, 14, 14, 14, 15, 15, 15, 11,
-    10, 10, 11, 11, 12, 13, 13, 14, 13, 14, 14, 15, 15, 15, 16, 12,
-    11, 11, 11, 12, 13, 13, 13, 13, 14, 14, 14, 14, 15, 15, 16, 12,
-    11, 11, 12, 12, 13, 13, 13, 14, 14, 15, 15, 15, 15, 17, 17, 12,
-    11, 12, 12, 13, 13, 13, 14, 14, 15, 15, 15, 15, 16, 16, 16, 12,
-    12, 12, 12, 13, 13, 14, 14, 15, 15, 15, 15, 16, 15, 16, 15, 13,
-    12, 13, 12, 13, 14, 14, 14, 14, 15, 16, 16, 16, 17, 17, 16, 12,
-    13, 13, 13, 13, 14, 14, 15, 16, 16, 16, 16, 16, 16, 15, 16, 13,
-    13, 14, 14, 14, 14, 15, 15, 15, 15, 17, 16, 16, 16, 16, 18, 13,
-    15, 14, 14, 14, 15, 15, 16, 16, 16, 18, 17, 17, 17, 19, 17, 13,
-    14, 15, 13, 14, 16, 16, 15, 16, 16, 17, 18, 17, 19, 17, 16, 13,
-    10, 10, 10, 11, 11, 12, 12, 12, 13, 13, 13, 13, 13, 13, 13, 10
-];
-
-Tables.t24l = [
-    4, 5, 7, 8, 9, 10, 10, 11, 11, 12, 12, 12, 12, 12, 13, 10,
-    5, 6, 7, 8, 9, 10, 10, 11, 11, 11, 12, 12, 12, 12, 12, 10,
-    7, 7, 8, 9, 9, 10, 10, 11, 11, 11, 11, 12, 12, 12, 13, 9,
-    8, 8, 9, 9, 10, 10, 10, 11, 11, 11, 11, 12, 12, 12, 12, 9,
-    9, 9, 9, 10, 10, 10, 10, 11, 11, 11, 12, 12, 12, 12, 13, 9,
-    10, 9, 10, 10, 10, 10, 11, 11, 11, 11, 12, 12, 12, 12, 12, 9,
-    10, 10, 10, 10, 10, 11, 11, 11, 11, 12, 12, 12, 12, 12, 13, 9,
-    11, 10, 10, 10, 11, 11, 11, 11, 12, 12, 12, 12, 12, 13, 13, 10,
-    11, 11, 11, 11, 11, 11, 11, 11, 11, 12, 12, 12, 12, 13, 13, 10,
-    11, 11, 11, 11, 11, 11, 11, 12, 12, 12, 12, 12, 13, 13, 13, 10,
-    12, 11, 11, 11, 11, 12, 12, 12, 12, 12, 12, 13, 13, 13, 13, 10,
-    12, 12, 11, 11, 11, 12, 12, 12, 12, 12, 12, 13, 13, 13, 13, 10,
-    12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 13, 13, 13, 13, 13, 10,
-    12, 12, 12, 12, 12, 12, 12, 12, 13, 13, 13, 13, 13, 13, 13, 10,
-    13, 12, 12, 12, 12, 12, 12, 13, 13, 13, 13, 13, 13, 13, 13, 10,
-    9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 10, 10, 10, 10, 6
-];
-
-Tables.t32l = [
-    1 + 0, 4 + 1, 4 + 1, 5 + 2, 4 + 1, 6 + 2, 5 + 2, 6 + 3,
-    4 + 1, 5 + 2, 5 + 2, 6 + 3, 5 + 2, 6 + 3, 6 + 3, 6 + 4
-];
-
-Tables.t33l = [
-    4 + 0, 4 + 1, 4 + 1, 4 + 2, 4 + 1, 4 + 2, 4 + 2, 4 + 3,
-    4 + 1, 4 + 2, 4 + 2, 4 + 3, 4 + 2, 4 + 3, 4 + 3, 4 + 4
-];
-
-Tables.ht = [
-    /* xlen, linmax, table, hlen */
-    new HuffCodeTab(0, 0, null, null),
-    new HuffCodeTab(2, 0, Tables.t1HB, Tables.t1l),
-    new HuffCodeTab(3, 0, Tables.t2HB, Tables.t2l),
-    new HuffCodeTab(3, 0, Tables.t3HB, Tables.t3l),
-    new HuffCodeTab(0, 0, null, null), /* Apparently not used */
-    new HuffCodeTab(4, 0, Tables.t5HB, Tables.t5l),
-    new HuffCodeTab(4, 0, Tables.t6HB, Tables.t6l),
-    new HuffCodeTab(6, 0, Tables.t7HB, Tables.t7l),
-    new HuffCodeTab(6, 0, Tables.t8HB, Tables.t8l),
-    new HuffCodeTab(6, 0, Tables.t9HB, Tables.t9l),
-    new HuffCodeTab(8, 0, Tables.t10HB, Tables.t10l),
-    new HuffCodeTab(8, 0, Tables.t11HB, Tables.t11l),
-    new HuffCodeTab(8, 0, Tables.t12HB, Tables.t12l),
-    new HuffCodeTab(16, 0, Tables.t13HB, Tables.t13l),
-    new HuffCodeTab(0, 0, null, Tables.t16_5l), /* Apparently not used */
-    new HuffCodeTab(16, 0, Tables.t15HB, Tables.t15l),
-
-    new HuffCodeTab(1, 1, Tables.t16HB, Tables.t16l),
-    new HuffCodeTab(2, 3, Tables.t16HB, Tables.t16l),
-    new HuffCodeTab(3, 7, Tables.t16HB, Tables.t16l),
-    new HuffCodeTab(4, 15, Tables.t16HB, Tables.t16l),
-    new HuffCodeTab(6, 63, Tables.t16HB, Tables.t16l),
-    new HuffCodeTab(8, 255, Tables.t16HB, Tables.t16l),
-    new HuffCodeTab(10, 1023, Tables.t16HB, Tables.t16l),
-    new HuffCodeTab(13, 8191, Tables.t16HB, Tables.t16l),
-
-    new HuffCodeTab(4, 15, Tables.t24HB, Tables.t24l),
-    new HuffCodeTab(5, 31, Tables.t24HB, Tables.t24l),
-    new HuffCodeTab(6, 63, Tables.t24HB, Tables.t24l),
-    new HuffCodeTab(7, 127, Tables.t24HB, Tables.t24l),
-    new HuffCodeTab(8, 255, Tables.t24HB, Tables.t24l),
-    new HuffCodeTab(9, 511, Tables.t24HB, Tables.t24l),
-    new HuffCodeTab(11, 2047, Tables.t24HB, Tables.t24l),
-    new HuffCodeTab(13, 8191, Tables.t24HB, Tables.t24l),
-
-    new HuffCodeTab(0, 0, Tables.t32HB, Tables.t32l),
-    new HuffCodeTab(0, 0, Tables.t33HB, Tables.t33l),
-];
-
-/**
- * <CODE>
- *  for (i = 0; i < 16*16; i++) [
- *      largetbl[i] = ((ht[16].hlen[i]) << 16) + ht[24].hlen[i];
- *  ]
- * </CODE>
- *
- */
-Tables.largetbl = [
-    0x010004, 0x050005, 0x070007, 0x090008, 0x0a0009, 0x0a000a, 0x0b000a, 0x0b000b,
-    0x0c000b, 0x0c000c, 0x0c000c, 0x0d000c, 0x0d000c, 0x0d000c, 0x0e000d, 0x0a000a,
-    0x040005, 0x060006, 0x080007, 0x090008, 0x0a0009, 0x0b000a, 0x0b000a, 0x0b000b,
-    0x0c000b, 0x0c000b, 0x0c000c, 0x0d000c, 0x0e000c, 0x0d000c, 0x0e000c, 0x0a000a,
-    0x070007, 0x080007, 0x090008, 0x0a0009, 0x0b0009, 0x0b000a, 0x0c000a, 0x0c000b,
-    0x0d000b, 0x0c000b, 0x0d000b, 0x0d000c, 0x0d000c, 0x0e000c, 0x0e000d, 0x0b0009,
-    0x090008, 0x090008, 0x0a0009, 0x0b0009, 0x0b000a, 0x0c000a, 0x0c000a, 0x0c000b,
-    0x0d000b, 0x0d000b, 0x0e000b, 0x0e000c, 0x0e000c, 0x0f000c, 0x0f000c, 0x0c0009,
-    0x0a0009, 0x0a0009, 0x0b0009, 0x0b000a, 0x0c000a, 0x0c000a, 0x0d000a, 0x0d000b,
-    0x0d000b, 0x0e000b, 0x0e000c, 0x0e000c, 0x0f000c, 0x0f000c, 0x0f000d, 0x0b0009,
-    0x0a000a, 0x0a0009, 0x0b000a, 0x0b000a, 0x0c000a, 0x0d000a, 0x0d000b, 0x0e000b,
-    0x0d000b, 0x0e000b, 0x0e000c, 0x0f000c, 0x0f000c, 0x0f000c, 0x10000c, 0x0c0009,
-    0x0b000a, 0x0b000a, 0x0b000a, 0x0c000a, 0x0d000a, 0x0d000b, 0x0d000b, 0x0d000b,
-    0x0e000b, 0x0e000c, 0x0e000c, 0x0e000c, 0x0f000c, 0x0f000c, 0x10000d, 0x0c0009,
-    0x0b000b, 0x0b000a, 0x0c000a, 0x0c000a, 0x0d000b, 0x0d000b, 0x0d000b, 0x0e000b,
-    0x0e000c, 0x0f000c, 0x0f000c, 0x0f000c, 0x0f000c, 0x11000d, 0x11000d, 0x0c000a,
-    0x0b000b, 0x0c000b, 0x0c000b, 0x0d000b, 0x0d000b, 0x0d000b, 0x0e000b, 0x0e000b,
-    0x0f000b, 0x0f000c, 0x0f000c, 0x0f000c, 0x10000c, 0x10000d, 0x10000d, 0x0c000a,
-    0x0c000b, 0x0c000b, 0x0c000b, 0x0d000b, 0x0d000b, 0x0e000b, 0x0e000b, 0x0f000c,
-    0x0f000c, 0x0f000c, 0x0f000c, 0x10000c, 0x0f000d, 0x10000d, 0x0f000d, 0x0d000a,
-    0x0c000c, 0x0d000b, 0x0c000b, 0x0d000b, 0x0e000b, 0x0e000c, 0x0e000c, 0x0e000c,
-    0x0f000c, 0x10000c, 0x10000c, 0x10000d, 0x11000d, 0x11000d, 0x10000d, 0x0c000a,
-    0x0d000c, 0x0d000c, 0x0d000b, 0x0d000b, 0x0e000b, 0x0e000c, 0x0f000c, 0x10000c,
-    0x10000c, 0x10000c, 0x10000c, 0x10000d, 0x10000d, 0x0f000d, 0x10000d, 0x0d000a,
-    0x0d000c, 0x0e000c, 0x0e000c, 0x0e000c, 0x0e000c, 0x0f000c, 0x0f000c, 0x0f000c,
-    0x0f000c, 0x11000c, 0x10000d, 0x10000d, 0x10000d, 0x10000d, 0x12000d, 0x0d000a,
-    0x0f000c, 0x0e000c, 0x0e000c, 0x0e000c, 0x0f000c, 0x0f000c, 0x10000c, 0x10000c,
-    0x10000d, 0x12000d, 0x11000d, 0x11000d, 0x11000d, 0x13000d, 0x11000d, 0x0d000a,
-    0x0e000d, 0x0f000c, 0x0d000c, 0x0e000c, 0x10000c, 0x10000c, 0x0f000c, 0x10000d,
-    0x10000d, 0x11000d, 0x12000d, 0x11000d, 0x13000d, 0x11000d, 0x10000d, 0x0d000a,
-    0x0a0009, 0x0a0009, 0x0a0009, 0x0b0009, 0x0b0009, 0x0c0009, 0x0c0009, 0x0c0009,
-    0x0d0009, 0x0d0009, 0x0d0009, 0x0d000a, 0x0d000a, 0x0d000a, 0x0d000a, 0x0a0006
-];
-/**
- * <CODE>
- *  for (i = 0; i < 3*3; i++) [
- *      table23[i] = ((ht[2].hlen[i]) << 16) + ht[3].hlen[i];
- *  ]
- * </CODE>
- *
- */
-Tables.table23 = [
-    0x010002, 0x040003, 0x070007,
-    0x040004, 0x050004, 0x070007,
-    0x060006, 0x070007, 0x080008
-];
-
-/**
- * <CODE>
- *  for (i = 0; i < 4*4; i++) [
- *       table56[i] = ((ht[5].hlen[i]) << 16) + ht[6].hlen[i];
- *   ]
- * </CODE>
- *
- */
-Tables.table56 = [
-    0x010003, 0x040004, 0x070006, 0x080008, 0x040004, 0x050004, 0x080006, 0x090007,
-    0x070005, 0x080006, 0x090007, 0x0a0008, 0x080007, 0x080007, 0x090008, 0x0a0009
-];
-
-Tables.bitrate_table = [
-    [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160, -1], /* MPEG 2 */
-    [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, -1], /* MPEG 1 */
-    [0, 8, 16, 24, 32, 40, 48, 56, 64, -1, -1, -1, -1, -1, -1, -1], /* MPEG 2.5 */
-];
-
-/**
- * MPEG 2, MPEG 1, MPEG 2.5.
- */
-Tables.samplerate_table = [
-    [22050, 24000, 16000, -1],
-    [44100, 48000, 32000, -1],
-    [11025, 12000, 8000, -1],
-];
-
-/**
- * This is the scfsi_band table from 2.4.2.7 of the IS.
- */
-Tables.scfsi_band = [0, 6, 11, 16, 21];
-
-function MeanBits(meanBits) {
-    this.bits = meanBits;
-}
-
-function VBRQuantize() {
-    var qupvt;
-    var tak;
-
-    this.setModules = function (_qupvt, _tk) {
-        qupvt = _qupvt;
-        tak = _tk;
-    }
-    //TODO
-
-}
-
-//package mp3;
-
-function CalcNoiseResult() {
-    /**
-     * sum of quantization noise > masking
-     */
-    this.over_noise = 0.;
-    /**
-     * sum of all quantization noise
-     */
-    this.tot_noise = 0.;
-    /**
-     * max quantization noise
-     */
-    this.max_noise = 0.;
-    /**
-     * number of quantization noise > masking
-     */
-    this.over_count = 0;
-    /**
-     * SSD-like cost of distorted bands
-     */
-    this.over_SSD = 0;
-    this.bits = 0;
-}
-
-
-function LameGlobalFlags() {
-
-    this.class_id = 0;
-
-    /* input description */
-
-    /**
-     * number of samples. default=-1
-     */
-    this.num_samples = 0;
-    /**
-     * input number of channels. default=2
-     */
-    this.num_channels = 0;
-    /**
-     * input_samp_rate in Hz. default=44.1 kHz
-     */
-    this.in_samplerate = 0;
-    /**
-     * output_samp_rate. default: LAME picks best value at least not used for
-     * MP3 decoding: Remember 44.1 kHz MP3s and AC97
-     */
-    this.out_samplerate = 0;
-    /**
-     * scale input by this amount before encoding at least not used for MP3
-     * decoding
-     */
-    this.scale = 0.;
-    /**
-     * scale input of channel 0 (left) by this amount before encoding
-     */
-    this.scale_left = 0.;
-    /**
-     * scale input of channel 1 (right) by this amount before encoding
-     */
-    this.scale_right = 0.;
-
-    /* general control params */
-    /**
-     * collect data for a MP3 frame analyzer?
-     */
-    this.analysis = false;
-    /**
-     * add Xing VBR tag?
-     */
-    this.bWriteVbrTag = false;
-
-    /**
-     * use lame/mpglib to convert mp3 to wav
-     */
-    this.decode_only = false;
-    /**
-     * quality setting 0=best, 9=worst default=5
-     */
-    this.quality = 0;
-    /**
-     * see enum default = LAME picks best value
-     */
-    this.mode = MPEGMode.STEREO;
-    /**
-     * force M/S mode. requires mode=1
-     */
-    this.force_ms = false;
-    /**
-     * use free format? default=0
-     */
-    this.free_format = false;
-    /**
-     * find the RG value? default=0
-     */
-    this.findReplayGain = false;
-    /**
-     * decode on the fly? default=0
-     */
-    this.decode_on_the_fly = false;
-    /**
-     * 1 (default) writes ID3 tags, 0 not
-     */
-    this.write_id3tag_automatic = false;
-
-    /*
-     * set either brate>0 or compression_ratio>0, LAME will compute the value of
-     * the variable not set. Default is compression_ratio = 11.025
-     */
-    /**
-     * bitrate
-     */
-    this.brate = 0;
-    /**
-     * sizeof(wav file)/sizeof(mp3 file)
-     */
-    this.compression_ratio = 0.;
-
-    /* frame params */
-    /**
-     * mark as copyright. default=0
-     */
-    this.copyright = 0;
-    /**
-     * mark as original. default=1
-     */
-    this.original = 0;
-    /**
-     * the MP3 'private extension' bit. Meaningless
-     */
-    this.extension = 0;
-    /**
-     * Input PCM is emphased PCM (for instance from one of the rarely emphased
-     * CDs), it is STRONGLY not recommended to use this, because psycho does not
-     * take it into account, and last but not least many decoders don't care
-     * about these bits
-     */
-    this.emphasis = 0;
-    /**
-     * use 2 bytes per frame for a CRC checksum. default=0
-     */
-    this.error_protection = 0;
-    /**
-     * enforce ISO spec as much as possible
-     */
-    this.strict_ISO = false;
-
-    /**
-     * use bit reservoir?
-     */
-    this.disable_reservoir = false;
-
-    /* quantization/noise shaping */
-    this.quant_comp = 0;
-    this.quant_comp_short = 0;
-    this.experimentalY = false;
-    this.experimentalZ = 0;
-    this.exp_nspsytune = 0;
-
-    this.preset = 0;
-
-    /* VBR control */
-    this.VBR = null;
-    /**
-     * Range [0,...,1[
-     */
-    this.VBR_q_frac = 0.;
-    /**
-     * Range [0,...,9]
-     */
-    this.VBR_q = 0;
-    this.VBR_mean_bitrate_kbps = 0;
-    this.VBR_min_bitrate_kbps = 0;
-    this.VBR_max_bitrate_kbps = 0;
-    /**
-     * strictly enforce VBR_min_bitrate normaly, it will be violated for analog
-     * silence
-     */
-    this.VBR_hard_min = 0;
-
-    /* resampling and filtering */
-
-    /**
-     * freq in Hz. 0=lame choses. -1=no filter
-     */
-    this.lowpassfreq = 0;
-    /**
-     * freq in Hz. 0=lame choses. -1=no filter
-     */
-    this.highpassfreq = 0;
-    /**
-     * freq width of filter, in Hz (default=15%)
-     */
-    this.lowpasswidth = 0;
-    /**
-     * freq width of filter, in Hz (default=15%)
-     */
-    this.highpasswidth = 0;
-
-    /*
-     * psycho acoustics and other arguments which you should not change unless
-     * you know what you are doing
-     */
-
-    this.maskingadjust = 0.;
-    this.maskingadjust_short = 0.;
-    /**
-     * only use ATH
-     */
-    this.ATHonly = false;
-    /**
-     * only use ATH for short blocks
-     */
-    this.ATHshort = false;
-    /**
-     * disable ATH
-     */
-    this.noATH = false;
-    /**
-     * select ATH formula
-     */
-    this.ATHtype = 0;
-    /**
-     * change ATH formula 4 shape
-     */
-    this.ATHcurve = 0.;
-    /**
-     * lower ATH by this many db
-     */
-    this.ATHlower = 0.;
-    /**
-     * select ATH auto-adjust scheme
-     */
-    this.athaa_type = 0;
-    /**
-     * select ATH auto-adjust loudness calc
-     */
-    this.athaa_loudapprox = 0;
-    /**
-     * dB, tune active region of auto-level
-     */
-    this.athaa_sensitivity = 0.;
-    this.short_blocks = null;
-    /**
-     * use temporal masking effect
-     */
-    this.useTemporal = false;
-    this.interChRatio = 0.;
-    /**
-     * Naoki's adjustment of Mid/Side maskings
-     */
-    this.msfix = 0.;
-
-    /**
-     * 0 off, 1 on
-     */
-    this.tune = false;
-    /**
-     * used to pass values for debugging and stuff
-     */
-    this.tune_value_a = 0.;
-
-    /************************************************************************/
-    /* internal variables, do not set... */
-    /* provided because they may be of use to calling application */
-    /************************************************************************/
-
-    /**
-     * 0=MPEG-2/2.5 1=MPEG-1
-     */
-    this.version = 0;
-    this.encoder_delay = 0;
-    /**
-     * number of samples of padding appended to input
-     */
-    this.encoder_padding = 0;
-    this.framesize = 0;
-    /**
-     * number of frames encoded
-     */
-    this.frameNum = 0;
-    /**
-     * is this struct owned by calling program or lame?
-     */
-    this.lame_allocated_gfp = 0;
-    /**************************************************************************/
-    /* more internal variables are stored in this structure: */
-    /**************************************************************************/
-    this.internal_flags = null;
-}
-
-
-
-/**
- * ATH related stuff, if something new ATH related has to be added, please plug
- * it here into the ATH.
- */
-function ATH() {
-    /**
-     * Method for the auto adjustment.
-     */
-    this.useAdjust = 0;
-    /**
-     * factor for tuning the (sample power) point below which adaptive threshold
-     * of hearing adjustment occurs
-     */
-    this.aaSensitivityP = 0.;
-    /**
-     * Lowering based on peak volume, 1 = no lowering.
-     */
-    this.adjust = 0.;
-    /**
-     * Limit for dynamic ATH adjust.
-     */
-    this.adjustLimit = 0.;
-    /**
-     * Determined to lower x dB each second.
-     */
-    this.decay = 0.;
-    /**
-     * Lowest ATH value.
-     */
-    this.floor = 0.;
-    /**
-     * ATH for sfbs in long blocks.
-     */
-    this.l = new_float(Encoder.SBMAX_l);
-    /**
-     * ATH for sfbs in short blocks.
-     */
-    this.s = new_float(Encoder.SBMAX_s);
-    /**
-     * ATH for partitioned sfb21 in long blocks.
-     */
-    this.psfb21 = new_float(Encoder.PSFB21);
-    /**
-     * ATH for partitioned sfb12 in short blocks.
-     */
-    this.psfb12 = new_float(Encoder.PSFB12);
-    /**
-     * ATH for long block convolution bands.
-     */
-    this.cb_l = new_float(Encoder.CBANDS);
-    /**
-     * ATH for short block convolution bands.
-     */
-    this.cb_s = new_float(Encoder.CBANDS);
-    /**
-     * Equal loudness weights (based on ATH).
-     */
-    this.eql_w = new_float(Encoder.BLKSIZE / 2);
-}
-
-
-
-function ReplayGain() {
-    this.linprebuf = new_float(GainAnalysis.MAX_ORDER * 2);
-    /**
-     * left input samples, with pre-buffer
-     */
-    this.linpre = 0;
-    this.lstepbuf = new_float(GainAnalysis.MAX_SAMPLES_PER_WINDOW + GainAnalysis.MAX_ORDER);
-    /**
-     * left "first step" (i.e. post first filter) samples
-     */
-    this.lstep = 0;
-    this.loutbuf = new_float(GainAnalysis.MAX_SAMPLES_PER_WINDOW + GainAnalysis.MAX_ORDER);
-    /**
-     * left "out" (i.e. post second filter) samples
-     */
-    this.lout = 0;
-    this.rinprebuf = new_float(GainAnalysis.MAX_ORDER * 2);
-    /**
-     * right input samples ...
-     */
-    this.rinpre = 0;
-    this.rstepbuf = new_float(GainAnalysis.MAX_SAMPLES_PER_WINDOW + GainAnalysis.MAX_ORDER);
-    this.rstep = 0;
-    this.routbuf = new_float(GainAnalysis.MAX_SAMPLES_PER_WINDOW + GainAnalysis.MAX_ORDER);
-    this.rout = 0;
-    /**
-     * number of samples required to reach number of milliseconds required
-     * for RMS window
-     */
-    this.sampleWindow = 0;
-    this.totsamp = 0;
-    this.lsum = 0.;
-    this.rsum = 0.;
-    this.freqindex = 0;
-    this.first = 0;
-    this.A = new_int(0 | (GainAnalysis.STEPS_per_dB * GainAnalysis.MAX_dB));
-    this.B = new_int(0 | (GainAnalysis.STEPS_per_dB * GainAnalysis.MAX_dB));
-
-}
-
-
-
-function CBRNewIterationLoop(_quantize)  {
-    var quantize = _quantize;
-    this.quantize = quantize;
-	this.iteration_loop = function(gfp, pe, ms_ener_ratio, ratio) {
-		var gfc = gfp.internal_flags;
-        var l3_xmin = new_float(L3Side.SFBMAX);
-		var xrpow = new_float(576);
-		var targ_bits = new_int(2);
-		var mean_bits = 0, max_bits;
-		var l3_side = gfc.l3_side;
-
-		var mb = new MeanBits(mean_bits);
-		this.quantize.rv.ResvFrameBegin(gfp, mb);
-		mean_bits = mb.bits;
-
-		/* quantize! */
-		for (var gr = 0; gr < gfc.mode_gr; gr++) {
-
-			/*
-			 * calculate needed bits
-			 */
-			max_bits = this.quantize.qupvt.on_pe(gfp, pe, targ_bits, mean_bits,
-					gr, gr);
-
-			if (gfc.mode_ext == Encoder.MPG_MD_MS_LR) {
-				this.quantize.ms_convert(gfc.l3_side, gr);
-				this.quantize.qupvt.reduce_side(targ_bits, ms_ener_ratio[gr],
-						mean_bits, max_bits);
-			}
-
-			for (var ch = 0; ch < gfc.channels_out; ch++) {
-				var adjust, masking_lower_db;
-				var cod_info = l3_side.tt[gr][ch];
-
-				if (cod_info.block_type != Encoder.SHORT_TYPE) {
-					// NORM, START or STOP type
-					adjust = 0;
-					masking_lower_db = gfc.PSY.mask_adjust - adjust;
-				} else {
-					adjust = 0;
-					masking_lower_db = gfc.PSY.mask_adjust_short - adjust;
-				}
-				gfc.masking_lower =  Math.pow(10.0,
-						masking_lower_db * 0.1);
-
-				/*
-				 * init_outer_loop sets up cod_info, scalefac and xrpow
-				 */
-				this.quantize.init_outer_loop(gfc, cod_info);
-				if (this.quantize.init_xrpow(gfc, cod_info, xrpow)) {
-					/*
-					 * xr contains energy we will have to encode calculate the
-					 * masking abilities find some good quantization in
-					 * outer_loop
-					 */
-					this.quantize.qupvt.calc_xmin(gfp, ratio[gr][ch], cod_info,
-							l3_xmin);
-					this.quantize.outer_loop(gfp, cod_info, l3_xmin, xrpow, ch,
-							targ_bits[ch]);
-				}
-
-				this.quantize.iteration_finish_one(gfc, gr, ch);
-			} /* for ch */
-		} /* for gr */
-
-		this.quantize.rv.ResvFrameEnd(gfc, mean_bits);
-	}
-}
 //package mp3;
 
 /**
@@ -5642,1014 +5201,6 @@ function ScaleFac(arrL, arrS, arr21, arr12) {
         System.arraycopy(this.arr21, 0, this.psfb21, 0, Math.min(this.arr21.length, this.psfb21.length));
         System.arraycopy(this.arr12, 0, this.psfb12, 0, Math.min(this.arr12.length, this.psfb12.length));
     }
-}
-
-/*
- *      quantize_pvt source file
- *
- *      Copyright (c) 1999-2002 Takehiro Tominaga
- *      Copyright (c) 2000-2002 Robert Hegemann
- *      Copyright (c) 2001 Naoki Shibata
- *      Copyright (c) 2002-2005 Gabriel Bouvigne
- *
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Lesser General Public
- * License as published by the Free Software Foundation; either
- * version 2 of the License, or (at your option) any later version.
- *
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Library General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the
- * Free Software Foundation, Inc., 59 Temple Place - Suite 330,
- * Boston, MA 02111-1307, USA.
- */
-
-/* $Id: QuantizePVT.java,v 1.24 2011/05/24 20:48:06 kenchis Exp $ */
-
-
-QuantizePVT.Q_MAX = (256 + 1);
-QuantizePVT.Q_MAX2 = 116;
-QuantizePVT.LARGE_BITS = 100000;
-QuantizePVT.IXMAX_VAL = 8206;
-
-function QuantizePVT() {
-
-    var tak = null;
-    var rv = null;
-    var psy = null;
-
-    this.setModules = function (_tk, _rv, _psy) {
-        tak = _tk;
-        rv = _rv;
-        psy = _psy;
-    };
-
-    function POW20(x) {
-        return pow20[x + QuantizePVT.Q_MAX2];
-    }
-
-    this.IPOW20 = function (x) {
-        return ipow20[x];
-    }
-
-    /**
-     * smallest such that 1.0+DBL_EPSILON != 1.0
-     */
-    var DBL_EPSILON = 2.2204460492503131e-016;
-
-    /**
-     * ix always <= 8191+15. see count_bits()
-     */
-    var IXMAX_VAL = QuantizePVT.IXMAX_VAL;
-
-    var PRECALC_SIZE = (IXMAX_VAL + 2);
-
-    var Q_MAX = QuantizePVT.Q_MAX;
-
-
-    /**
-     * <CODE>
-     * minimum possible number of
-     * -cod_info.global_gain + ((scalefac[] + (cod_info.preflag ? pretab[sfb] : 0))
-     * << (cod_info.scalefac_scale + 1)) + cod_info.subblock_gain[cod_info.window[sfb]] * 8;
-     *
-     * for long block, 0+((15+3)<<2) = 18*4 = 72
-     * for short block, 0+(15<<2)+7*8 = 15*4+56 = 116
-     * </CODE>
-     */
-    var Q_MAX2 = QuantizePVT.Q_MAX2;
-
-    var LARGE_BITS = QuantizePVT.LARGE_BITS;
-
-
-    /**
-     * Assuming dynamic range=96dB, this value should be 92
-     */
-    var NSATHSCALE = 100;
-
-    /**
-     * The following table is used to implement the scalefactor partitioning for
-     * MPEG2 as described in section 2.4.3.2 of the IS. The indexing corresponds
-     * to the way the tables are presented in the IS:
-     *
-     * [table_number][row_in_table][column of nr_of_sfb]
-     */
-    this.nr_of_sfb_block = [
-        [[6, 5, 5, 5], [9, 9, 9, 9], [6, 9, 9, 9]],
-        [[6, 5, 7, 3], [9, 9, 12, 6], [6, 9, 12, 6]],
-        [[11, 10, 0, 0], [18, 18, 0, 0], [15, 18, 0, 0]],
-        [[7, 7, 7, 0], [12, 12, 12, 0], [6, 15, 12, 0]],
-        [[6, 6, 6, 3], [12, 9, 9, 6], [6, 12, 9, 6]],
-        [[8, 8, 5, 0], [15, 12, 9, 0], [6, 18, 9, 0]]];
-
-    /**
-     * Table B.6: layer3 preemphasis
-     */
-    var pretab = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1,
-        2, 2, 3, 3, 3, 2, 0];
-    this.pretab = pretab;
-
-    /**
-     * Here are MPEG1 Table B.8 and MPEG2 Table B.1 -- Layer III scalefactor
-     * bands. <BR>
-     * Index into this using a method such as:<BR>
-     * idx = fr_ps.header.sampling_frequency + (fr_ps.header.version * 3)
-     */
-    this.sfBandIndex = [
-        // Table B.2.b: 22.05 kHz
-        new ScaleFac([0, 6, 12, 18, 24, 30, 36, 44, 54, 66, 80, 96, 116, 140, 168, 200, 238, 284, 336, 396, 464,
-                522, 576],
-            [0, 4, 8, 12, 18, 24, 32, 42, 56, 74, 100, 132, 174, 192]
-            , [0, 0, 0, 0, 0, 0, 0] //  sfb21 pseudo sub bands
-            , [0, 0, 0, 0, 0, 0, 0] //  sfb12 pseudo sub bands
-        ),
-        /* Table B.2.c: 24 kHz */ /* docs: 332. mpg123(broken): 330 */
-        new ScaleFac([0, 6, 12, 18, 24, 30, 36, 44, 54, 66, 80, 96, 114, 136, 162, 194, 232, 278, 332, 394, 464,
-                540, 576],
-            [0, 4, 8, 12, 18, 26, 36, 48, 62, 80, 104, 136, 180, 192]
-            , [0, 0, 0, 0, 0, 0, 0] /*  sfb21 pseudo sub bands */
-            , [0, 0, 0, 0, 0, 0, 0] /*  sfb12 pseudo sub bands */
-        ),
-        /* Table B.2.a: 16 kHz */
-        new ScaleFac([0, 6, 12, 18, 24, 30, 36, 44, 54, 66, 80, 96, 116, 140, 168, 200, 238, 284, 336, 396, 464,
-                522, 576],
-            [0, 4, 8, 12, 18, 26, 36, 48, 62, 80, 104, 134, 174, 192]
-            , [0, 0, 0, 0, 0, 0, 0] /*  sfb21 pseudo sub bands */
-            , [0, 0, 0, 0, 0, 0, 0] /*  sfb12 pseudo sub bands */
-        ),
-        /* Table B.8.b: 44.1 kHz */
-        new ScaleFac([0, 4, 8, 12, 16, 20, 24, 30, 36, 44, 52, 62, 74, 90, 110, 134, 162, 196, 238, 288, 342, 418,
-                576],
-            [0, 4, 8, 12, 16, 22, 30, 40, 52, 66, 84, 106, 136, 192]
-            , [0, 0, 0, 0, 0, 0, 0] /*  sfb21 pseudo sub bands */
-            , [0, 0, 0, 0, 0, 0, 0] /*  sfb12 pseudo sub bands */
-        ),
-        /* Table B.8.c: 48 kHz */
-        new ScaleFac([0, 4, 8, 12, 16, 20, 24, 30, 36, 42, 50, 60, 72, 88, 106, 128, 156, 190, 230, 276, 330, 384,
-                576],
-            [0, 4, 8, 12, 16, 22, 28, 38, 50, 64, 80, 100, 126, 192]
-            , [0, 0, 0, 0, 0, 0, 0] /*  sfb21 pseudo sub bands */
-            , [0, 0, 0, 0, 0, 0, 0] /*  sfb12 pseudo sub bands */
-        ),
-        /* Table B.8.a: 32 kHz */
-        new ScaleFac([0, 4, 8, 12, 16, 20, 24, 30, 36, 44, 54, 66, 82, 102, 126, 156, 194, 240, 296, 364, 448, 550,
-                576],
-            [0, 4, 8, 12, 16, 22, 30, 42, 58, 78, 104, 138, 180, 192]
-            , [0, 0, 0, 0, 0, 0, 0] /*  sfb21 pseudo sub bands */
-            , [0, 0, 0, 0, 0, 0, 0] /*  sfb12 pseudo sub bands */
-        ),
-        /* MPEG-2.5 11.025 kHz */
-        new ScaleFac([0, 6, 12, 18, 24, 30, 36, 44, 54, 66, 80, 96, 116, 140, 168, 200, 238, 284, 336, 396, 464,
-                522, 576],
-            [0 / 3, 12 / 3, 24 / 3, 36 / 3, 54 / 3, 78 / 3, 108 / 3, 144 / 3, 186 / 3, 240 / 3, 312 / 3,
-                402 / 3, 522 / 3, 576 / 3]
-            , [0, 0, 0, 0, 0, 0, 0] /*  sfb21 pseudo sub bands */
-            , [0, 0, 0, 0, 0, 0, 0] /*  sfb12 pseudo sub bands */
-        ),
-        /* MPEG-2.5 12 kHz */
-        new ScaleFac([0, 6, 12, 18, 24, 30, 36, 44, 54, 66, 80, 96, 116, 140, 168, 200, 238, 284, 336, 396, 464,
-                522, 576],
-            [0 / 3, 12 / 3, 24 / 3, 36 / 3, 54 / 3, 78 / 3, 108 / 3, 144 / 3, 186 / 3, 240 / 3, 312 / 3,
-                402 / 3, 522 / 3, 576 / 3]
-            , [0, 0, 0, 0, 0, 0, 0] /*  sfb21 pseudo sub bands */
-            , [0, 0, 0, 0, 0, 0, 0] /*  sfb12 pseudo sub bands */
-        ),
-        /* MPEG-2.5 8 kHz */
-        new ScaleFac([0, 12, 24, 36, 48, 60, 72, 88, 108, 132, 160, 192, 232, 280, 336, 400, 476, 566, 568, 570,
-                572, 574, 576],
-            [0 / 3, 24 / 3, 48 / 3, 72 / 3, 108 / 3, 156 / 3, 216 / 3, 288 / 3, 372 / 3, 480 / 3, 486 / 3,
-                492 / 3, 498 / 3, 576 / 3]
-            , [0, 0, 0, 0, 0, 0, 0] /*  sfb21 pseudo sub bands */
-            , [0, 0, 0, 0, 0, 0, 0] /*  sfb12 pseudo sub bands */
-        )
-    ];
-
-    var pow20 = new_float(Q_MAX + Q_MAX2 + 1);
-    var ipow20 = new_float(Q_MAX);
-    var pow43 = new_float(PRECALC_SIZE);
-
-    var adj43 = new_float(PRECALC_SIZE);
-    this.adj43 = adj43;
-
-    /**
-     * <PRE>
-     * compute the ATH for each scalefactor band cd range: 0..96db
-     *
-     * Input: 3.3kHz signal 32767 amplitude (3.3kHz is where ATH is smallest =
-     * -5db) longblocks: sfb=12 en0/bw=-11db max_en0 = 1.3db shortblocks: sfb=5
-     * -9db 0db
-     *
-     * Input: 1 1 1 1 1 1 1 -1 -1 -1 -1 -1 -1 -1 (repeated) longblocks: amp=1
-     * sfb=12 en0/bw=-103 db max_en0 = -92db amp=32767 sfb=12 -12 db -1.4db
-     *
-     * Input: 1 1 1 1 1 1 1 -1 -1 -1 -1 -1 -1 -1 (repeated) shortblocks: amp=1
-     * sfb=5 en0/bw= -99 -86 amp=32767 sfb=5 -9 db 4db
-     *
-     *
-     * MAX energy of largest wave at 3.3kHz = 1db AVE energy of largest wave at
-     * 3.3kHz = -11db Let's take AVE: -11db = maximum signal in sfb=12. Dynamic
-     * range of CD: 96db. Therefor energy of smallest audible wave in sfb=12 =
-     * -11 - 96 = -107db = ATH at 3.3kHz.
-     *
-     * ATH formula for this wave: -5db. To adjust to LAME scaling, we need ATH =
-     * ATH_formula - 103 (db) ATH = ATH * 2.5e-10 (ener)
-     * </PRE>
-     */
-    function ATHmdct(gfp, f) {
-        var ath = psy.ATHformula(f, gfp);
-
-        ath -= NSATHSCALE;
-
-        /* modify the MDCT scaling for the ATH and convert to energy */
-        ath = Math.pow(10.0, ath / 10.0 + gfp.ATHlower);
-        return ath;
-    }
-
-    function compute_ath(gfp) {
-        var ATH_l = gfp.internal_flags.ATH.l;
-        var ATH_psfb21 = gfp.internal_flags.ATH.psfb21;
-        var ATH_s = gfp.internal_flags.ATH.s;
-        var ATH_psfb12 = gfp.internal_flags.ATH.psfb12;
-        var gfc = gfp.internal_flags;
-        var samp_freq = gfp.out_samplerate;
-
-        for (var sfb = 0; sfb < Encoder.SBMAX_l; sfb++) {
-            var start = gfc.scalefac_band.l[sfb];
-            var end = gfc.scalefac_band.l[sfb + 1];
-            ATH_l[sfb] = Float.MAX_VALUE;
-            for (var i = start; i < end; i++) {
-                var freq = i * samp_freq / (2 * 576);
-                var ATH_f = ATHmdct(gfp, freq);
-                /* freq in kHz */
-                ATH_l[sfb] = Math.min(ATH_l[sfb], ATH_f);
-            }
-        }
-
-        for (var sfb = 0; sfb < Encoder.PSFB21; sfb++) {
-            var start = gfc.scalefac_band.psfb21[sfb];
-            var end = gfc.scalefac_band.psfb21[sfb + 1];
-            ATH_psfb21[sfb] = Float.MAX_VALUE;
-            for (var i = start; i < end; i++) {
-                var freq = i * samp_freq / (2 * 576);
-                var ATH_f = ATHmdct(gfp, freq);
-                /* freq in kHz */
-                ATH_psfb21[sfb] = Math.min(ATH_psfb21[sfb], ATH_f);
-            }
-        }
-
-        for (var sfb = 0; sfb < Encoder.SBMAX_s; sfb++) {
-            var start = gfc.scalefac_band.s[sfb];
-            var end = gfc.scalefac_band.s[sfb + 1];
-            ATH_s[sfb] = Float.MAX_VALUE;
-            for (var i = start; i < end; i++) {
-                var freq = i * samp_freq / (2 * 192);
-                var ATH_f = ATHmdct(gfp, freq);
-                /* freq in kHz */
-                ATH_s[sfb] = Math.min(ATH_s[sfb], ATH_f);
-            }
-            ATH_s[sfb] *= (gfc.scalefac_band.s[sfb + 1] - gfc.scalefac_band.s[sfb]);
-        }
-
-        for (var sfb = 0; sfb < Encoder.PSFB12; sfb++) {
-            var start = gfc.scalefac_band.psfb12[sfb];
-            var end = gfc.scalefac_band.psfb12[sfb + 1];
-            ATH_psfb12[sfb] = Float.MAX_VALUE;
-            for (var i = start; i < end; i++) {
-                var freq = i * samp_freq / (2 * 192);
-                var ATH_f = ATHmdct(gfp, freq);
-                /* freq in kHz */
-                ATH_psfb12[sfb] = Math.min(ATH_psfb12[sfb], ATH_f);
-            }
-            /* not sure about the following */
-            ATH_psfb12[sfb] *= (gfc.scalefac_band.s[13] - gfc.scalefac_band.s[12]);
-        }
-
-        /*
-         * no-ATH mode: reduce ATH to -200 dB
-         */
-        if (gfp.noATH) {
-            for (var sfb = 0; sfb < Encoder.SBMAX_l; sfb++) {
-                ATH_l[sfb] = 1E-20;
-            }
-            for (var sfb = 0; sfb < Encoder.PSFB21; sfb++) {
-                ATH_psfb21[sfb] = 1E-20;
-            }
-            for (var sfb = 0; sfb < Encoder.SBMAX_s; sfb++) {
-                ATH_s[sfb] = 1E-20;
-            }
-            for (var sfb = 0; sfb < Encoder.PSFB12; sfb++) {
-                ATH_psfb12[sfb] = 1E-20;
-            }
-        }
-
-        /*
-         * work in progress, don't rely on it too much
-         */
-        gfc.ATH.floor = 10. * Math.log10(ATHmdct(gfp, -1.));
-    }
-
-    /**
-     * initialization for iteration_loop
-     */
-    this.iteration_init = function (gfp) {
-        var gfc = gfp.internal_flags;
-        var l3_side = gfc.l3_side;
-        var i;
-
-        if (gfc.iteration_init_init == 0) {
-            gfc.iteration_init_init = 1;
-
-            l3_side.main_data_begin = 0;
-            compute_ath(gfp);
-
-            pow43[0] = 0.0;
-            for (i = 1; i < PRECALC_SIZE; i++)
-                pow43[i] = Math.pow(i, 4.0 / 3.0);
-
-            for (i = 0; i < PRECALC_SIZE - 1; i++)
-                adj43[i] = ((i + 1) - Math.pow(
-                    0.5 * (pow43[i] + pow43[i + 1]), 0.75));
-            adj43[i] = 0.5;
-
-            for (i = 0; i < Q_MAX; i++)
-                ipow20[i] = Math.pow(2.0, (i - 210) * -0.1875);
-            for (i = 0; i <= Q_MAX + Q_MAX2; i++)
-                pow20[i] = Math.pow(2.0, (i - 210 - Q_MAX2) * 0.25);
-
-            tak.huffman_init(gfc);
-
-            {
-                var bass, alto, treble, sfb21;
-
-                i = (gfp.exp_nspsytune >> 2) & 63;
-                if (i >= 32)
-                    i -= 64;
-                bass = Math.pow(10, i / 4.0 / 10.0);
-
-                i = (gfp.exp_nspsytune >> 8) & 63;
-                if (i >= 32)
-                    i -= 64;
-                alto = Math.pow(10, i / 4.0 / 10.0);
-
-                i = (gfp.exp_nspsytune >> 14) & 63;
-                if (i >= 32)
-                    i -= 64;
-                treble = Math.pow(10, i / 4.0 / 10.0);
-
-                /*
-                 * to be compatible with Naoki's original code, the next 6 bits
-                 * define only the amount of changing treble for sfb21
-                 */
-                i = (gfp.exp_nspsytune >> 20) & 63;
-                if (i >= 32)
-                    i -= 64;
-                sfb21 = treble * Math.pow(10, i / 4.0 / 10.0);
-                for (i = 0; i < Encoder.SBMAX_l; i++) {
-                    var f;
-                    if (i <= 6)
-                        f = bass;
-                    else if (i <= 13)
-                        f = alto;
-                    else if (i <= 20)
-                        f = treble;
-                    else
-                        f = sfb21;
-
-                    gfc.nsPsy.longfact[i] = f;
-                }
-                for (i = 0; i < Encoder.SBMAX_s; i++) {
-                    var f;
-                    if (i <= 5)
-                        f = bass;
-                    else if (i <= 10)
-                        f = alto;
-                    else if (i <= 11)
-                        f = treble;
-                    else
-                        f = sfb21;
-
-                    gfc.nsPsy.shortfact[i] = f;
-                }
-            }
-        }
-    }
-
-    /**
-     * allocate bits among 2 channels based on PE<BR>
-     * mt 6/99<BR>
-     * bugfixes rh 8/01: often allocated more than the allowed 4095 bits
-     */
-    this.on_pe = function (gfp, pe,
-                           targ_bits, mean_bits, gr, cbr) {
-        var gfc = gfp.internal_flags;
-        var tbits = 0, bits;
-        var add_bits = new_int(2);
-        var ch;
-
-        /* allocate targ_bits for granule */
-        var mb = new MeanBits(tbits);
-        var extra_bits = rv.ResvMaxBits(gfp, mean_bits, mb, cbr);
-        tbits = mb.bits;
-        /* maximum allowed bits for this granule */
-        var max_bits = tbits + extra_bits;
-        if (max_bits > LameInternalFlags.MAX_BITS_PER_GRANULE) {
-            // hard limit per granule
-            max_bits = LameInternalFlags.MAX_BITS_PER_GRANULE;
-        }
-        for (bits = 0, ch = 0; ch < gfc.channels_out; ++ch) {
-            /******************************************************************
-             * allocate bits for each channel
-             ******************************************************************/
-            targ_bits[ch] = Math.min(LameInternalFlags.MAX_BITS_PER_CHANNEL,
-                tbits / gfc.channels_out);
-
-            add_bits[ch] = 0 | (targ_bits[ch] * pe[gr][ch] / 700.0 - targ_bits[ch]);
-
-            /* at most increase bits by 1.5*average */
-            if (add_bits[ch] > mean_bits * 3 / 4)
-                add_bits[ch] = mean_bits * 3 / 4;
-            if (add_bits[ch] < 0)
-                add_bits[ch] = 0;
-
-            if (add_bits[ch] + targ_bits[ch] > LameInternalFlags.MAX_BITS_PER_CHANNEL)
-                add_bits[ch] = Math.max(0,
-                    LameInternalFlags.MAX_BITS_PER_CHANNEL - targ_bits[ch]);
-
-            bits += add_bits[ch];
-        }
-        if (bits > extra_bits) {
-            for (ch = 0; ch < gfc.channels_out; ++ch) {
-                add_bits[ch] = extra_bits * add_bits[ch] / bits;
-            }
-        }
-
-        for (ch = 0; ch < gfc.channels_out; ++ch) {
-            targ_bits[ch] += add_bits[ch];
-            extra_bits -= add_bits[ch];
-        }
-
-        for (bits = 0, ch = 0; ch < gfc.channels_out; ++ch) {
-            bits += targ_bits[ch];
-        }
-        if (bits > LameInternalFlags.MAX_BITS_PER_GRANULE) {
-            var sum = 0;
-            for (ch = 0; ch < gfc.channels_out; ++ch) {
-                targ_bits[ch] *= LameInternalFlags.MAX_BITS_PER_GRANULE;
-                targ_bits[ch] /= bits;
-                sum += targ_bits[ch];
-            }
-        }
-
-        return max_bits;
-    }
-
-    this.reduce_side = function (targ_bits, ms_ener_ratio, mean_bits, max_bits) {
-
-        /*
-         * ms_ener_ratio = 0: allocate 66/33 mid/side fac=.33 ms_ener_ratio =.5:
-         * allocate 50/50 mid/side fac= 0
-         */
-        /* 75/25 split is fac=.5 */
-        var fac = .33 * (.5 - ms_ener_ratio) / .5;
-        if (fac < 0)
-            fac = 0;
-        if (fac > .5)
-            fac = .5;
-
-        /* number of bits to move from side channel to mid channel */
-        /* move_bits = fac*targ_bits[1]; */
-        var move_bits = 0 | (fac * .5 * (targ_bits[0] + targ_bits[1]));
-
-        if (move_bits > LameInternalFlags.MAX_BITS_PER_CHANNEL - targ_bits[0]) {
-            move_bits = LameInternalFlags.MAX_BITS_PER_CHANNEL - targ_bits[0];
-        }
-        if (move_bits < 0)
-            move_bits = 0;
-
-        if (targ_bits[1] >= 125) {
-            /* dont reduce side channel below 125 bits */
-            if (targ_bits[1] - move_bits > 125) {
-
-                /* if mid channel already has 2x more than average, dont bother */
-                /* mean_bits = bits per granule (for both channels) */
-                if (targ_bits[0] < mean_bits)
-                    targ_bits[0] += move_bits;
-                targ_bits[1] -= move_bits;
-            } else {
-                targ_bits[0] += targ_bits[1] - 125;
-                targ_bits[1] = 125;
-            }
-        }
-
-        move_bits = targ_bits[0] + targ_bits[1];
-        if (move_bits > max_bits) {
-            targ_bits[0] = (max_bits * targ_bits[0]) / move_bits;
-            targ_bits[1] = (max_bits * targ_bits[1]) / move_bits;
-        }
-    };
-
-    /**
-     *  Robert Hegemann 2001-04-27:
-     *  this adjusts the ATH, keeping the original noise floor
-     *  affects the higher frequencies more than the lower ones
-     */
-    this.athAdjust = function (a, x, athFloor) {
-        /*
-         * work in progress
-         */
-        var o = 90.30873362;
-        var p = 94.82444863;
-        var u = Util.FAST_LOG10_X(x, 10.0);
-        var v = a * a;
-        var w = 0.0;
-        u -= athFloor;
-        /* undo scaling */
-        if (v > 1E-20)
-            w = 1. + Util.FAST_LOG10_X(v, 10.0 / o);
-        if (w < 0)
-            w = 0.;
-        u *= w;
-        u += athFloor + o - p;
-        /* redo scaling */
-
-        return Math.pow(10., 0.1 * u);
-    };
-
-    /**
-     * Calculate the allowed distortion for each scalefactor band, as determined
-     * by the psychoacoustic model. xmin(sb) = ratio(sb) * en(sb) / bw(sb)
-     *
-     * returns number of sfb's with energy > ATH
-     */
-    this.calc_xmin = function (gfp, ratio, cod_info, pxmin) {
-        var pxminPos = 0;
-        var gfc = gfp.internal_flags;
-        var gsfb, j = 0, ath_over = 0;
-        var ATH = gfc.ATH;
-        var xr = cod_info.xr;
-        var enable_athaa_fix = (gfp.VBR == VbrMode.vbr_mtrh) ? 1 : 0;
-        var masking_lower = gfc.masking_lower;
-
-        if (gfp.VBR == VbrMode.vbr_mtrh || gfp.VBR == VbrMode.vbr_mt) {
-            /* was already done in PSY-Model */
-            masking_lower = 1.0;
-        }
-
-        for (gsfb = 0; gsfb < cod_info.psy_lmax; gsfb++) {
-            var en0, xmin;
-            var rh1, rh2;
-            var width, l;
-
-            if (gfp.VBR == VbrMode.vbr_rh || gfp.VBR == VbrMode.vbr_mtrh)
-                xmin = athAdjust(ATH.adjust, ATH.l[gsfb], ATH.floor);
-            else
-                xmin = ATH.adjust * ATH.l[gsfb];
-
-            width = cod_info.width[gsfb];
-            rh1 = xmin / width;
-            rh2 = DBL_EPSILON;
-            l = width >> 1;
-            en0 = 0.0;
-            do {
-                var xa, xb;
-                xa = xr[j] * xr[j];
-                en0 += xa;
-                rh2 += (xa < rh1) ? xa : rh1;
-                j++;
-                xb = xr[j] * xr[j];
-                en0 += xb;
-                rh2 += (xb < rh1) ? xb : rh1;
-                j++;
-            } while (--l > 0);
-            if (en0 > xmin)
-                ath_over++;
-
-            if (gsfb == Encoder.SBPSY_l) {
-                var x = xmin * gfc.nsPsy.longfact[gsfb];
-                if (rh2 < x) {
-                    rh2 = x;
-                }
-            }
-            if (enable_athaa_fix != 0) {
-                xmin = rh2;
-            }
-            if (!gfp.ATHonly) {
-                var e = ratio.en.l[gsfb];
-                if (e > 0.0) {
-                    var x;
-                    x = en0 * ratio.thm.l[gsfb] * masking_lower / e;
-                    if (enable_athaa_fix != 0)
-                        x *= gfc.nsPsy.longfact[gsfb];
-                    if (xmin < x)
-                        xmin = x;
-                }
-            }
-            if (enable_athaa_fix != 0)
-                pxmin[pxminPos++] = xmin;
-            else
-                pxmin[pxminPos++] = xmin * gfc.nsPsy.longfact[gsfb];
-        }
-        /* end of long block loop */
-
-        /* use this function to determine the highest non-zero coeff */
-        var max_nonzero = 575;
-        if (cod_info.block_type != Encoder.SHORT_TYPE) {
-            // NORM, START or STOP type, but not SHORT
-            var k = 576;
-            while (k-- != 0 && BitStream.EQ(xr[k], 0)) {
-                max_nonzero = k;
-            }
-        }
-        cod_info.max_nonzero_coeff = max_nonzero;
-
-        for (var sfb = cod_info.sfb_smin; gsfb < cod_info.psymax; sfb++, gsfb += 3) {
-            var width, b;
-            var tmpATH;
-            if (gfp.VBR == VbrMode.vbr_rh || gfp.VBR == VbrMode.vbr_mtrh)
-                tmpATH = athAdjust(ATH.adjust, ATH.s[sfb], ATH.floor);
-            else
-                tmpATH = ATH.adjust * ATH.s[sfb];
-
-            width = cod_info.width[gsfb];
-            for (b = 0; b < 3; b++) {
-                var en0 = 0.0, xmin;
-                var rh1, rh2;
-                var l = width >> 1;
-
-                rh1 = tmpATH / width;
-                rh2 = DBL_EPSILON;
-                do {
-                    var xa, xb;
-                    xa = xr[j] * xr[j];
-                    en0 += xa;
-                    rh2 += (xa < rh1) ? xa : rh1;
-                    j++;
-                    xb = xr[j] * xr[j];
-                    en0 += xb;
-                    rh2 += (xb < rh1) ? xb : rh1;
-                    j++;
-                } while (--l > 0);
-                if (en0 > tmpATH)
-                    ath_over++;
-                if (sfb == Encoder.SBPSY_s) {
-                    var x = tmpATH * gfc.nsPsy.shortfact[sfb];
-                    if (rh2 < x) {
-                        rh2 = x;
-                    }
-                }
-                if (enable_athaa_fix != 0)
-                    xmin = rh2;
-                else
-                    xmin = tmpATH;
-
-                if (!gfp.ATHonly && !gfp.ATHshort) {
-                    var e = ratio.en.s[sfb][b];
-                    if (e > 0.0) {
-                        var x;
-                        x = en0 * ratio.thm.s[sfb][b] * masking_lower / e;
-                        if (enable_athaa_fix != 0)
-                            x *= gfc.nsPsy.shortfact[sfb];
-                        if (xmin < x)
-                            xmin = x;
-                    }
-                }
-                if (enable_athaa_fix != 0)
-                    pxmin[pxminPos++] = xmin;
-                else
-                    pxmin[pxminPos++] = xmin * gfc.nsPsy.shortfact[sfb];
-            }
-            /* b */
-            if (gfp.useTemporal) {
-                if (pxmin[pxminPos - 3] > pxmin[pxminPos - 3 + 1])
-                    pxmin[pxminPos - 3 + 1] += (pxmin[pxminPos - 3] - pxmin[pxminPos - 3 + 1])
-                        * gfc.decay;
-                if (pxmin[pxminPos - 3 + 1] > pxmin[pxminPos - 3 + 2])
-                    pxmin[pxminPos - 3 + 2] += (pxmin[pxminPos - 3 + 1] - pxmin[pxminPos - 3 + 2])
-                        * gfc.decay;
-            }
-        }
-        /* end of short block sfb loop */
-
-        return ath_over;
-    };
-
-    function StartLine(j) {
-        this.s = j;
-    }
-
-    this.calc_noise_core = function (cod_info, startline, l, step) {
-        var noise = 0;
-        var j = startline.s;
-        var ix = cod_info.l3_enc;
-
-        if (j > cod_info.count1) {
-            while ((l--) != 0) {
-                var temp;
-                temp = cod_info.xr[j];
-                j++;
-                noise += temp * temp;
-                temp = cod_info.xr[j];
-                j++;
-                noise += temp * temp;
-            }
-        } else if (j > cod_info.big_values) {
-            var ix01 = new_float(2);
-            ix01[0] = 0;
-            ix01[1] = step;
-            while ((l--) != 0) {
-                var temp;
-                temp = Math.abs(cod_info.xr[j]) - ix01[ix[j]];
-                j++;
-                noise += temp * temp;
-                temp = Math.abs(cod_info.xr[j]) - ix01[ix[j]];
-                j++;
-                noise += temp * temp;
-            }
-        } else {
-            while ((l--) != 0) {
-                var temp;
-                temp = Math.abs(cod_info.xr[j]) - pow43[ix[j]] * step;
-                j++;
-                noise += temp * temp;
-                temp = Math.abs(cod_info.xr[j]) - pow43[ix[j]] * step;
-                j++;
-                noise += temp * temp;
-            }
-        }
-
-        startline.s = j;
-        return noise;
-    }
-
-    /**
-     * <PRE>
-     * -oo dB  =>  -1.00
-     * - 6 dB  =>  -0.97
-     * - 3 dB  =>  -0.80
-     * - 2 dB  =>  -0.64
-     * - 1 dB  =>  -0.38
-     *   0 dB  =>   0.00
-     * + 1 dB  =>  +0.49
-     * + 2 dB  =>  +1.06
-     * + 3 dB  =>  +1.68
-     * + 6 dB  =>  +3.69
-     * +10 dB  =>  +6.45
-     * </PRE>
-     */
-    this.calc_noise = function (cod_info, l3_xmin, distort, res, prev_noise) {
-        var distortPos = 0;
-        var l3_xminPos = 0;
-        var sfb, l, over = 0;
-        var over_noise_db = 0;
-        /* 0 dB relative to masking */
-        var tot_noise_db = 0;
-        /* -200 dB relative to masking */
-        var max_noise = -20.0;
-        var j = 0;
-        var scalefac = cod_info.scalefac;
-        var scalefacPos = 0;
-
-        res.over_SSD = 0;
-
-        for (sfb = 0; sfb < cod_info.psymax; sfb++) {
-            var s = cod_info.global_gain
-                - (((scalefac[scalefacPos++]) + (cod_info.preflag != 0 ? pretab[sfb]
-                    : 0)) << (cod_info.scalefac_scale + 1))
-                - cod_info.subblock_gain[cod_info.window[sfb]] * 8;
-            var noise = 0.0;
-
-            if (prev_noise != null && (prev_noise.step[sfb] == s)) {
-
-                /* use previously computed values */
-                noise = prev_noise.noise[sfb];
-                j += cod_info.width[sfb];
-                distort[distortPos++] = noise / l3_xmin[l3_xminPos++];
-
-                noise = prev_noise.noise_log[sfb];
-
-            } else {
-                var step = POW20(s);
-                l = cod_info.width[sfb] >> 1;
-
-                if ((j + cod_info.width[sfb]) > cod_info.max_nonzero_coeff) {
-                    var usefullsize;
-                    usefullsize = cod_info.max_nonzero_coeff - j + 1;
-
-                    if (usefullsize > 0)
-                        l = usefullsize >> 1;
-                    else
-                        l = 0;
-                }
-
-                var sl = new StartLine(j);
-                noise = this.calc_noise_core(cod_info, sl, l, step);
-                j = sl.s;
-
-                if (prev_noise != null) {
-                    /* save noise values */
-                    prev_noise.step[sfb] = s;
-                    prev_noise.noise[sfb] = noise;
-                }
-
-                noise = distort[distortPos++] = noise / l3_xmin[l3_xminPos++];
-
-                /* multiplying here is adding in dB, but can overflow */
-                noise = Util.FAST_LOG10(Math.max(noise, 1E-20));
-
-                if (prev_noise != null) {
-                    /* save noise values */
-                    prev_noise.noise_log[sfb] = noise;
-                }
-            }
-
-            if (prev_noise != null) {
-                /* save noise values */
-                prev_noise.global_gain = cod_info.global_gain;
-            }
-
-            tot_noise_db += noise;
-
-            if (noise > 0.0) {
-                var tmp;
-
-                tmp = Math.max(0 | (noise * 10 + .5), 1);
-                res.over_SSD += tmp * tmp;
-
-                over++;
-                /* multiplying here is adding in dB -but can overflow */
-                /* over_noise *= noise; */
-                over_noise_db += noise;
-            }
-            max_noise = Math.max(max_noise, noise);
-
-        }
-
-        res.over_count = over;
-        res.tot_noise = tot_noise_db;
-        res.over_noise = over_noise_db;
-        res.max_noise = max_noise;
-
-        return over;
-    }
-
-    /**
-     * updates plotting data
-     *
-     * Mark Taylor 2000-??-??
-     *
-     * Robert Hegemann: moved noise/distortion calc into it
-     */
-    this.set_pinfo = function (gfp, cod_info, ratio, gr, ch) {
-        var gfc = gfp.internal_flags;
-        var sfb, sfb2;
-        var l;
-        var en0, en1;
-        var ifqstep = (cod_info.scalefac_scale == 0) ? .5 : 1.0;
-        var scalefac = cod_info.scalefac;
-
-        var l3_xmin = new_float(L3Side.SFBMAX);
-        var xfsf = new_float(L3Side.SFBMAX);
-        var noise = new CalcNoiseResult();
-
-        calc_xmin(gfp, ratio, cod_info, l3_xmin);
-        calc_noise(cod_info, l3_xmin, xfsf, noise, null);
-
-        var j = 0;
-        sfb2 = cod_info.sfb_lmax;
-        if (cod_info.block_type != Encoder.SHORT_TYPE
-            && 0 == cod_info.mixed_block_flag)
-            sfb2 = 22;
-        for (sfb = 0; sfb < sfb2; sfb++) {
-            var start = gfc.scalefac_band.l[sfb];
-            var end = gfc.scalefac_band.l[sfb + 1];
-            var bw = end - start;
-            for (en0 = 0.0; j < end; j++)
-                en0 += cod_info.xr[j] * cod_info.xr[j];
-            en0 /= bw;
-            /* convert to MDCT units */
-            /* scaling so it shows up on FFT plot */
-            en1 = 1e15;
-            gfc.pinfo.en[gr][ch][sfb] = en1 * en0;
-            gfc.pinfo.xfsf[gr][ch][sfb] = en1 * l3_xmin[sfb] * xfsf[sfb] / bw;
-
-            if (ratio.en.l[sfb] > 0 && !gfp.ATHonly)
-                en0 = en0 / ratio.en.l[sfb];
-            else
-                en0 = 0.0;
-
-            gfc.pinfo.thr[gr][ch][sfb] = en1
-                * Math.max(en0 * ratio.thm.l[sfb], gfc.ATH.l[sfb]);
-
-            /* there is no scalefactor bands >= SBPSY_l */
-            gfc.pinfo.LAMEsfb[gr][ch][sfb] = 0;
-            if (cod_info.preflag != 0 && sfb >= 11)
-                gfc.pinfo.LAMEsfb[gr][ch][sfb] = -ifqstep * pretab[sfb];
-
-            if (sfb < Encoder.SBPSY_l) {
-                /* scfsi should be decoded by caller side */
-                gfc.pinfo.LAMEsfb[gr][ch][sfb] -= ifqstep * scalefac[sfb];
-            }
-        }
-        /* for sfb */
-
-        if (cod_info.block_type == Encoder.SHORT_TYPE) {
-            sfb2 = sfb;
-            for (sfb = cod_info.sfb_smin; sfb < Encoder.SBMAX_s; sfb++) {
-                var start = gfc.scalefac_band.s[sfb];
-                var end = gfc.scalefac_band.s[sfb + 1];
-                var bw = end - start;
-                for (var i = 0; i < 3; i++) {
-                    for (en0 = 0.0, l = start; l < end; l++) {
-                        en0 += cod_info.xr[j] * cod_info.xr[j];
-                        j++;
-                    }
-                    en0 = Math.max(en0 / bw, 1e-20);
-                    /* convert to MDCT units */
-                    /* scaling so it shows up on FFT plot */
-                    en1 = 1e15;
-
-                    gfc.pinfo.en_s[gr][ch][3 * sfb + i] = en1 * en0;
-                    gfc.pinfo.xfsf_s[gr][ch][3 * sfb + i] = en1 * l3_xmin[sfb2]
-                        * xfsf[sfb2] / bw;
-                    if (ratio.en.s[sfb][i] > 0)
-                        en0 = en0 / ratio.en.s[sfb][i];
-                    else
-                        en0 = 0.0;
-                    if (gfp.ATHonly || gfp.ATHshort)
-                        en0 = 0;
-
-                    gfc.pinfo.thr_s[gr][ch][3 * sfb + i] = en1
-                        * Math.max(en0 * ratio.thm.s[sfb][i],
-                            gfc.ATH.s[sfb]);
-
-                    /* there is no scalefactor bands >= SBPSY_s */
-                    gfc.pinfo.LAMEsfb_s[gr][ch][3 * sfb + i] = -2.0
-                        * cod_info.subblock_gain[i];
-                    if (sfb < Encoder.SBPSY_s) {
-                        gfc.pinfo.LAMEsfb_s[gr][ch][3 * sfb + i] -= ifqstep
-                            * scalefac[sfb2];
-                    }
-                    sfb2++;
-                }
-            }
-        }
-        /* block type short */
-        gfc.pinfo.LAMEqss[gr][ch] = cod_info.global_gain;
-        gfc.pinfo.LAMEmainbits[gr][ch] = cod_info.part2_3_length
-            + cod_info.part2_length;
-        gfc.pinfo.LAMEsfbits[gr][ch] = cod_info.part2_length;
-
-        gfc.pinfo.over[gr][ch] = noise.over_count;
-        gfc.pinfo.max_noise[gr][ch] = noise.max_noise * 10.0;
-        gfc.pinfo.over_noise[gr][ch] = noise.over_noise * 10.0;
-        gfc.pinfo.tot_noise[gr][ch] = noise.tot_noise * 10.0;
-        gfc.pinfo.over_SSD[gr][ch] = noise.over_SSD;
-    }
-
-    /**
-     * updates plotting data for a whole frame
-     *
-     * Robert Hegemann 2000-10-21
-     */
-    function set_frame_pinfo(gfp, ratio) {
-        var gfc = gfp.internal_flags;
-
-        gfc.masking_lower = 1.0;
-
-        /*
-         * for every granule and channel patch l3_enc and set info
-         */
-        for (var gr = 0; gr < gfc.mode_gr; gr++) {
-            for (var ch = 0; ch < gfc.channels_out; ch++) {
-                var cod_info = gfc.l3_side.tt[gr][ch];
-                var scalefac_sav = new_int(L3Side.SFBMAX);
-                System.arraycopy(cod_info.scalefac, 0, scalefac_sav, 0,
-                    scalefac_sav.length);
-
-                /*
-                 * reconstruct the scalefactors in case SCFSI was used
-                 */
-                if (gr == 1) {
-                    var sfb;
-                    for (sfb = 0; sfb < cod_info.sfb_lmax; sfb++) {
-                        if (cod_info.scalefac[sfb] < 0) /* scfsi */
-                            cod_info.scalefac[sfb] = gfc.l3_side.tt[0][ch].scalefac[sfb];
-                    }
-                }
-
-                set_pinfo(gfp, cod_info, ratio[gr][ch], gr, ch);
-                System.arraycopy(scalefac_sav, 0, cod_info.scalefac, 0,
-                    scalefac_sav.length);
-            }
-            /* for ch */
-        }
-        /* for gr */
-    }
-
 }
 
 
@@ -8224,6 +6775,447 @@ function Quantize() {
 
 }
 
+
+function LameGlobalFlags() {
+
+    this.class_id = 0;
+
+    /* input description */
+
+    /**
+     * number of samples. default=-1
+     */
+    this.num_samples = 0;
+    /**
+     * input number of channels. default=2
+     */
+    this.num_channels = 0;
+    /**
+     * input_samp_rate in Hz. default=44.1 kHz
+     */
+    this.in_samplerate = 0;
+    /**
+     * output_samp_rate. default: LAME picks best value at least not used for
+     * MP3 decoding: Remember 44.1 kHz MP3s and AC97
+     */
+    this.out_samplerate = 0;
+    /**
+     * scale input by this amount before encoding at least not used for MP3
+     * decoding
+     */
+    this.scale = 0.;
+    /**
+     * scale input of channel 0 (left) by this amount before encoding
+     */
+    this.scale_left = 0.;
+    /**
+     * scale input of channel 1 (right) by this amount before encoding
+     */
+    this.scale_right = 0.;
+
+    /* general control params */
+    /**
+     * collect data for a MP3 frame analyzer?
+     */
+    this.analysis = false;
+    /**
+     * add Xing VBR tag?
+     */
+    this.bWriteVbrTag = false;
+
+    /**
+     * use lame/mpglib to convert mp3 to wav
+     */
+    this.decode_only = false;
+    /**
+     * quality setting 0=best, 9=worst default=5
+     */
+    this.quality = 0;
+    /**
+     * see enum default = LAME picks best value
+     */
+    this.mode = MPEGMode.STEREO;
+    /**
+     * force M/S mode. requires mode=1
+     */
+    this.force_ms = false;
+    /**
+     * use free format? default=0
+     */
+    this.free_format = false;
+    /**
+     * find the RG value? default=0
+     */
+    this.findReplayGain = false;
+    /**
+     * decode on the fly? default=0
+     */
+    this.decode_on_the_fly = false;
+    /**
+     * 1 (default) writes ID3 tags, 0 not
+     */
+    this.write_id3tag_automatic = false;
+
+    /*
+     * set either brate>0 or compression_ratio>0, LAME will compute the value of
+     * the variable not set. Default is compression_ratio = 11.025
+     */
+    /**
+     * bitrate
+     */
+    this.brate = 0;
+    /**
+     * sizeof(wav file)/sizeof(mp3 file)
+     */
+    this.compression_ratio = 0.;
+
+    /* frame params */
+    /**
+     * mark as copyright. default=0
+     */
+    this.copyright = 0;
+    /**
+     * mark as original. default=1
+     */
+    this.original = 0;
+    /**
+     * the MP3 'private extension' bit. Meaningless
+     */
+    this.extension = 0;
+    /**
+     * Input PCM is emphased PCM (for instance from one of the rarely emphased
+     * CDs), it is STRONGLY not recommended to use this, because psycho does not
+     * take it into account, and last but not least many decoders don't care
+     * about these bits
+     */
+    this.emphasis = 0;
+    /**
+     * use 2 bytes per frame for a CRC checksum. default=0
+     */
+    this.error_protection = 0;
+    /**
+     * enforce ISO spec as much as possible
+     */
+    this.strict_ISO = false;
+
+    /**
+     * use bit reservoir?
+     */
+    this.disable_reservoir = false;
+
+    /* quantization/noise shaping */
+    this.quant_comp = 0;
+    this.quant_comp_short = 0;
+    this.experimentalY = false;
+    this.experimentalZ = 0;
+    this.exp_nspsytune = 0;
+
+    this.preset = 0;
+
+    /* VBR control */
+    this.VBR = null;
+    /**
+     * Range [0,...,1[
+     */
+    this.VBR_q_frac = 0.;
+    /**
+     * Range [0,...,9]
+     */
+    this.VBR_q = 0;
+    this.VBR_mean_bitrate_kbps = 0;
+    this.VBR_min_bitrate_kbps = 0;
+    this.VBR_max_bitrate_kbps = 0;
+    /**
+     * strictly enforce VBR_min_bitrate normaly, it will be violated for analog
+     * silence
+     */
+    this.VBR_hard_min = 0;
+
+    /* resampling and filtering */
+
+    /**
+     * freq in Hz. 0=lame choses. -1=no filter
+     */
+    this.lowpassfreq = 0;
+    /**
+     * freq in Hz. 0=lame choses. -1=no filter
+     */
+    this.highpassfreq = 0;
+    /**
+     * freq width of filter, in Hz (default=15%)
+     */
+    this.lowpasswidth = 0;
+    /**
+     * freq width of filter, in Hz (default=15%)
+     */
+    this.highpasswidth = 0;
+
+    /*
+     * psycho acoustics and other arguments which you should not change unless
+     * you know what you are doing
+     */
+
+    this.maskingadjust = 0.;
+    this.maskingadjust_short = 0.;
+    /**
+     * only use ATH
+     */
+    this.ATHonly = false;
+    /**
+     * only use ATH for short blocks
+     */
+    this.ATHshort = false;
+    /**
+     * disable ATH
+     */
+    this.noATH = false;
+    /**
+     * select ATH formula
+     */
+    this.ATHtype = 0;
+    /**
+     * change ATH formula 4 shape
+     */
+    this.ATHcurve = 0.;
+    /**
+     * lower ATH by this many db
+     */
+    this.ATHlower = 0.;
+    /**
+     * select ATH auto-adjust scheme
+     */
+    this.athaa_type = 0;
+    /**
+     * select ATH auto-adjust loudness calc
+     */
+    this.athaa_loudapprox = 0;
+    /**
+     * dB, tune active region of auto-level
+     */
+    this.athaa_sensitivity = 0.;
+    this.short_blocks = null;
+    /**
+     * use temporal masking effect
+     */
+    this.useTemporal = false;
+    this.interChRatio = 0.;
+    /**
+     * Naoki's adjustment of Mid/Side maskings
+     */
+    this.msfix = 0.;
+
+    /**
+     * 0 off, 1 on
+     */
+    this.tune = false;
+    /**
+     * used to pass values for debugging and stuff
+     */
+    this.tune_value_a = 0.;
+
+    /************************************************************************/
+    /* internal variables, do not set... */
+    /* provided because they may be of use to calling application */
+    /************************************************************************/
+
+    /**
+     * 0=MPEG-2/2.5 1=MPEG-1
+     */
+    this.version = 0;
+    this.encoder_delay = 0;
+    /**
+     * number of samples of padding appended to input
+     */
+    this.encoder_padding = 0;
+    this.framesize = 0;
+    /**
+     * number of frames encoded
+     */
+    this.frameNum = 0;
+    /**
+     * is this struct owned by calling program or lame?
+     */
+    this.lame_allocated_gfp = 0;
+    /**************************************************************************/
+    /* more internal variables are stored in this structure: */
+    /**************************************************************************/
+    this.internal_flags = null;
+}
+
+
+
+function ReplayGain() {
+    this.linprebuf = new_float(GainAnalysis.MAX_ORDER * 2);
+    /**
+     * left input samples, with pre-buffer
+     */
+    this.linpre = 0;
+    this.lstepbuf = new_float(GainAnalysis.MAX_SAMPLES_PER_WINDOW + GainAnalysis.MAX_ORDER);
+    /**
+     * left "first step" (i.e. post first filter) samples
+     */
+    this.lstep = 0;
+    this.loutbuf = new_float(GainAnalysis.MAX_SAMPLES_PER_WINDOW + GainAnalysis.MAX_ORDER);
+    /**
+     * left "out" (i.e. post second filter) samples
+     */
+    this.lout = 0;
+    this.rinprebuf = new_float(GainAnalysis.MAX_ORDER * 2);
+    /**
+     * right input samples ...
+     */
+    this.rinpre = 0;
+    this.rstepbuf = new_float(GainAnalysis.MAX_SAMPLES_PER_WINDOW + GainAnalysis.MAX_ORDER);
+    this.rstep = 0;
+    this.routbuf = new_float(GainAnalysis.MAX_SAMPLES_PER_WINDOW + GainAnalysis.MAX_ORDER);
+    this.rout = 0;
+    /**
+     * number of samples required to reach number of milliseconds required
+     * for RMS window
+     */
+    this.sampleWindow = 0;
+    this.totsamp = 0;
+    this.lsum = 0.;
+    this.rsum = 0.;
+    this.freqindex = 0;
+    this.first = 0;
+    this.A = new_int(0 | (GainAnalysis.STEPS_per_dB * GainAnalysis.MAX_dB));
+    this.B = new_int(0 | (GainAnalysis.STEPS_per_dB * GainAnalysis.MAX_dB));
+
+}
+
+
+
+/**
+ * ATH related stuff, if something new ATH related has to be added, please plug
+ * it here into the ATH.
+ */
+function ATH() {
+    /**
+     * Method for the auto adjustment.
+     */
+    this.useAdjust = 0;
+    /**
+     * factor for tuning the (sample power) point below which adaptive threshold
+     * of hearing adjustment occurs
+     */
+    this.aaSensitivityP = 0.;
+    /**
+     * Lowering based on peak volume, 1 = no lowering.
+     */
+    this.adjust = 0.;
+    /**
+     * Limit for dynamic ATH adjust.
+     */
+    this.adjustLimit = 0.;
+    /**
+     * Determined to lower x dB each second.
+     */
+    this.decay = 0.;
+    /**
+     * Lowest ATH value.
+     */
+    this.floor = 0.;
+    /**
+     * ATH for sfbs in long blocks.
+     */
+    this.l = new_float(Encoder.SBMAX_l);
+    /**
+     * ATH for sfbs in short blocks.
+     */
+    this.s = new_float(Encoder.SBMAX_s);
+    /**
+     * ATH for partitioned sfb21 in long blocks.
+     */
+    this.psfb21 = new_float(Encoder.PSFB21);
+    /**
+     * ATH for partitioned sfb12 in short blocks.
+     */
+    this.psfb12 = new_float(Encoder.PSFB12);
+    /**
+     * ATH for long block convolution bands.
+     */
+    this.cb_l = new_float(Encoder.CBANDS);
+    /**
+     * ATH for short block convolution bands.
+     */
+    this.cb_s = new_float(Encoder.CBANDS);
+    /**
+     * Equal loudness weights (based on ATH).
+     */
+    this.eql_w = new_float(Encoder.BLKSIZE / 2);
+}
+
+
+
+function CBRNewIterationLoop(_quantize)  {
+    var quantize = _quantize;
+    this.quantize = quantize;
+	this.iteration_loop = function(gfp, pe, ms_ener_ratio, ratio) {
+		var gfc = gfp.internal_flags;
+        var l3_xmin = new_float(L3Side.SFBMAX);
+		var xrpow = new_float(576);
+		var targ_bits = new_int(2);
+		var mean_bits = 0, max_bits;
+		var l3_side = gfc.l3_side;
+
+		var mb = new MeanBits(mean_bits);
+		this.quantize.rv.ResvFrameBegin(gfp, mb);
+		mean_bits = mb.bits;
+
+		/* quantize! */
+		for (var gr = 0; gr < gfc.mode_gr; gr++) {
+
+			/*
+			 * calculate needed bits
+			 */
+			max_bits = this.quantize.qupvt.on_pe(gfp, pe, targ_bits, mean_bits,
+					gr, gr);
+
+			if (gfc.mode_ext == Encoder.MPG_MD_MS_LR) {
+				this.quantize.ms_convert(gfc.l3_side, gr);
+				this.quantize.qupvt.reduce_side(targ_bits, ms_ener_ratio[gr],
+						mean_bits, max_bits);
+			}
+
+			for (var ch = 0; ch < gfc.channels_out; ch++) {
+				var adjust, masking_lower_db;
+				var cod_info = l3_side.tt[gr][ch];
+
+				if (cod_info.block_type != Encoder.SHORT_TYPE) {
+					// NORM, START or STOP type
+					adjust = 0;
+					masking_lower_db = gfc.PSY.mask_adjust - adjust;
+				} else {
+					adjust = 0;
+					masking_lower_db = gfc.PSY.mask_adjust_short - adjust;
+				}
+				gfc.masking_lower =  Math.pow(10.0,
+						masking_lower_db * 0.1);
+
+				/*
+				 * init_outer_loop sets up cod_info, scalefac and xrpow
+				 */
+				this.quantize.init_outer_loop(gfc, cod_info);
+				if (this.quantize.init_xrpow(gfc, cod_info, xrpow)) {
+					/*
+					 * xr contains energy we will have to encode calculate the
+					 * masking abilities find some good quantization in
+					 * outer_loop
+					 */
+					this.quantize.qupvt.calc_xmin(gfp, ratio[gr][ch], cod_info,
+							l3_xmin);
+					this.quantize.outer_loop(gfp, cod_info, l3_xmin, xrpow, ch,
+							targ_bits[ch]);
+				}
+
+				this.quantize.iteration_finish_one(gfc, gr, ch);
+			} /* for ch */
+		} /* for gr */
+
+		this.quantize.rv.ResvFrameEnd(gfc, mean_bits);
+	}
+}
 //package mp3;
 
 
@@ -10053,23 +9045,6 @@ function VBRSeekInfo() {
 
 
 
-function IIISideInfo() {
-    this.tt = [[null, null], [null, null]];
-    this.main_data_begin = 0;
-    this.private_bits = 0;
-    this.resvDrain_pre = 0;
-    this.resvDrain_post = 0;
-    this.scfsi = [new_int(4), new_int(4)];
-
-    for (var gr = 0; gr < 2; gr++) {
-        for (var ch = 0; ch < 2; ch++) {
-            this.tt[gr][ch] = new GrInfo();
-        }
-    }
-}
-
-
-
 //package mp3;
 
 /**
@@ -10090,6 +9065,23 @@ function NsPsy() {
      */
     this.attackthre = 0.;
     this.attackthre_s = 0.;
+}
+
+
+
+function IIISideInfo() {
+    this.tt = [[null, null], [null, null]];
+    this.main_data_begin = 0;
+    this.private_bits = 0;
+    this.resvDrain_pre = 0;
+    this.resvDrain_post = 0;
+    this.scfsi = [new_int(4), new_int(4)];
+
+    for (var gr = 0; gr < 2; gr++) {
+        for (var ch = 0; ch < 2; ch++) {
+            this.tt[gr][ch] = new GrInfo();
+        }
+    }
 }
 
 
@@ -10471,6 +9463,1014 @@ function LameInternalFlags() {
     }
     for (var i = 0; i < this.header.length; i++) {
         this.header[i] = new Header();
+    }
+
+}
+
+/*
+ *      quantize_pvt source file
+ *
+ *      Copyright (c) 1999-2002 Takehiro Tominaga
+ *      Copyright (c) 2000-2002 Robert Hegemann
+ *      Copyright (c) 2001 Naoki Shibata
+ *      Copyright (c) 2002-2005 Gabriel Bouvigne
+ *
+ * This library is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2 of the License, or (at your option) any later version.
+ *
+ * This library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Library General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with this library; if not, write to the
+ * Free Software Foundation, Inc., 59 Temple Place - Suite 330,
+ * Boston, MA 02111-1307, USA.
+ */
+
+/* $Id: QuantizePVT.java,v 1.24 2011/05/24 20:48:06 kenchis Exp $ */
+
+
+QuantizePVT.Q_MAX = (256 + 1);
+QuantizePVT.Q_MAX2 = 116;
+QuantizePVT.LARGE_BITS = 100000;
+QuantizePVT.IXMAX_VAL = 8206;
+
+function QuantizePVT() {
+
+    var tak = null;
+    var rv = null;
+    var psy = null;
+
+    this.setModules = function (_tk, _rv, _psy) {
+        tak = _tk;
+        rv = _rv;
+        psy = _psy;
+    };
+
+    function POW20(x) {
+        return pow20[x + QuantizePVT.Q_MAX2];
+    }
+
+    this.IPOW20 = function (x) {
+        return ipow20[x];
+    }
+
+    /**
+     * smallest such that 1.0+DBL_EPSILON != 1.0
+     */
+    var DBL_EPSILON = 2.2204460492503131e-016;
+
+    /**
+     * ix always <= 8191+15. see count_bits()
+     */
+    var IXMAX_VAL = QuantizePVT.IXMAX_VAL;
+
+    var PRECALC_SIZE = (IXMAX_VAL + 2);
+
+    var Q_MAX = QuantizePVT.Q_MAX;
+
+
+    /**
+     * <CODE>
+     * minimum possible number of
+     * -cod_info.global_gain + ((scalefac[] + (cod_info.preflag ? pretab[sfb] : 0))
+     * << (cod_info.scalefac_scale + 1)) + cod_info.subblock_gain[cod_info.window[sfb]] * 8;
+     *
+     * for long block, 0+((15+3)<<2) = 18*4 = 72
+     * for short block, 0+(15<<2)+7*8 = 15*4+56 = 116
+     * </CODE>
+     */
+    var Q_MAX2 = QuantizePVT.Q_MAX2;
+
+    var LARGE_BITS = QuantizePVT.LARGE_BITS;
+
+
+    /**
+     * Assuming dynamic range=96dB, this value should be 92
+     */
+    var NSATHSCALE = 100;
+
+    /**
+     * The following table is used to implement the scalefactor partitioning for
+     * MPEG2 as described in section 2.4.3.2 of the IS. The indexing corresponds
+     * to the way the tables are presented in the IS:
+     *
+     * [table_number][row_in_table][column of nr_of_sfb]
+     */
+    this.nr_of_sfb_block = [
+        [[6, 5, 5, 5], [9, 9, 9, 9], [6, 9, 9, 9]],
+        [[6, 5, 7, 3], [9, 9, 12, 6], [6, 9, 12, 6]],
+        [[11, 10, 0, 0], [18, 18, 0, 0], [15, 18, 0, 0]],
+        [[7, 7, 7, 0], [12, 12, 12, 0], [6, 15, 12, 0]],
+        [[6, 6, 6, 3], [12, 9, 9, 6], [6, 12, 9, 6]],
+        [[8, 8, 5, 0], [15, 12, 9, 0], [6, 18, 9, 0]]];
+
+    /**
+     * Table B.6: layer3 preemphasis
+     */
+    var pretab = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1,
+        2, 2, 3, 3, 3, 2, 0];
+    this.pretab = pretab;
+
+    /**
+     * Here are MPEG1 Table B.8 and MPEG2 Table B.1 -- Layer III scalefactor
+     * bands. <BR>
+     * Index into this using a method such as:<BR>
+     * idx = fr_ps.header.sampling_frequency + (fr_ps.header.version * 3)
+     */
+    this.sfBandIndex = [
+        // Table B.2.b: 22.05 kHz
+        new ScaleFac([0, 6, 12, 18, 24, 30, 36, 44, 54, 66, 80, 96, 116, 140, 168, 200, 238, 284, 336, 396, 464,
+                522, 576],
+            [0, 4, 8, 12, 18, 24, 32, 42, 56, 74, 100, 132, 174, 192]
+            , [0, 0, 0, 0, 0, 0, 0] //  sfb21 pseudo sub bands
+            , [0, 0, 0, 0, 0, 0, 0] //  sfb12 pseudo sub bands
+        ),
+        /* Table B.2.c: 24 kHz */ /* docs: 332. mpg123(broken): 330 */
+        new ScaleFac([0, 6, 12, 18, 24, 30, 36, 44, 54, 66, 80, 96, 114, 136, 162, 194, 232, 278, 332, 394, 464,
+                540, 576],
+            [0, 4, 8, 12, 18, 26, 36, 48, 62, 80, 104, 136, 180, 192]
+            , [0, 0, 0, 0, 0, 0, 0] /*  sfb21 pseudo sub bands */
+            , [0, 0, 0, 0, 0, 0, 0] /*  sfb12 pseudo sub bands */
+        ),
+        /* Table B.2.a: 16 kHz */
+        new ScaleFac([0, 6, 12, 18, 24, 30, 36, 44, 54, 66, 80, 96, 116, 140, 168, 200, 238, 284, 336, 396, 464,
+                522, 576],
+            [0, 4, 8, 12, 18, 26, 36, 48, 62, 80, 104, 134, 174, 192]
+            , [0, 0, 0, 0, 0, 0, 0] /*  sfb21 pseudo sub bands */
+            , [0, 0, 0, 0, 0, 0, 0] /*  sfb12 pseudo sub bands */
+        ),
+        /* Table B.8.b: 44.1 kHz */
+        new ScaleFac([0, 4, 8, 12, 16, 20, 24, 30, 36, 44, 52, 62, 74, 90, 110, 134, 162, 196, 238, 288, 342, 418,
+                576],
+            [0, 4, 8, 12, 16, 22, 30, 40, 52, 66, 84, 106, 136, 192]
+            , [0, 0, 0, 0, 0, 0, 0] /*  sfb21 pseudo sub bands */
+            , [0, 0, 0, 0, 0, 0, 0] /*  sfb12 pseudo sub bands */
+        ),
+        /* Table B.8.c: 48 kHz */
+        new ScaleFac([0, 4, 8, 12, 16, 20, 24, 30, 36, 42, 50, 60, 72, 88, 106, 128, 156, 190, 230, 276, 330, 384,
+                576],
+            [0, 4, 8, 12, 16, 22, 28, 38, 50, 64, 80, 100, 126, 192]
+            , [0, 0, 0, 0, 0, 0, 0] /*  sfb21 pseudo sub bands */
+            , [0, 0, 0, 0, 0, 0, 0] /*  sfb12 pseudo sub bands */
+        ),
+        /* Table B.8.a: 32 kHz */
+        new ScaleFac([0, 4, 8, 12, 16, 20, 24, 30, 36, 44, 54, 66, 82, 102, 126, 156, 194, 240, 296, 364, 448, 550,
+                576],
+            [0, 4, 8, 12, 16, 22, 30, 42, 58, 78, 104, 138, 180, 192]
+            , [0, 0, 0, 0, 0, 0, 0] /*  sfb21 pseudo sub bands */
+            , [0, 0, 0, 0, 0, 0, 0] /*  sfb12 pseudo sub bands */
+        ),
+        /* MPEG-2.5 11.025 kHz */
+        new ScaleFac([0, 6, 12, 18, 24, 30, 36, 44, 54, 66, 80, 96, 116, 140, 168, 200, 238, 284, 336, 396, 464,
+                522, 576],
+            [0 / 3, 12 / 3, 24 / 3, 36 / 3, 54 / 3, 78 / 3, 108 / 3, 144 / 3, 186 / 3, 240 / 3, 312 / 3,
+                402 / 3, 522 / 3, 576 / 3]
+            , [0, 0, 0, 0, 0, 0, 0] /*  sfb21 pseudo sub bands */
+            , [0, 0, 0, 0, 0, 0, 0] /*  sfb12 pseudo sub bands */
+        ),
+        /* MPEG-2.5 12 kHz */
+        new ScaleFac([0, 6, 12, 18, 24, 30, 36, 44, 54, 66, 80, 96, 116, 140, 168, 200, 238, 284, 336, 396, 464,
+                522, 576],
+            [0 / 3, 12 / 3, 24 / 3, 36 / 3, 54 / 3, 78 / 3, 108 / 3, 144 / 3, 186 / 3, 240 / 3, 312 / 3,
+                402 / 3, 522 / 3, 576 / 3]
+            , [0, 0, 0, 0, 0, 0, 0] /*  sfb21 pseudo sub bands */
+            , [0, 0, 0, 0, 0, 0, 0] /*  sfb12 pseudo sub bands */
+        ),
+        /* MPEG-2.5 8 kHz */
+        new ScaleFac([0, 12, 24, 36, 48, 60, 72, 88, 108, 132, 160, 192, 232, 280, 336, 400, 476, 566, 568, 570,
+                572, 574, 576],
+            [0 / 3, 24 / 3, 48 / 3, 72 / 3, 108 / 3, 156 / 3, 216 / 3, 288 / 3, 372 / 3, 480 / 3, 486 / 3,
+                492 / 3, 498 / 3, 576 / 3]
+            , [0, 0, 0, 0, 0, 0, 0] /*  sfb21 pseudo sub bands */
+            , [0, 0, 0, 0, 0, 0, 0] /*  sfb12 pseudo sub bands */
+        )
+    ];
+
+    var pow20 = new_float(Q_MAX + Q_MAX2 + 1);
+    var ipow20 = new_float(Q_MAX);
+    var pow43 = new_float(PRECALC_SIZE);
+
+    var adj43 = new_float(PRECALC_SIZE);
+    this.adj43 = adj43;
+
+    /**
+     * <PRE>
+     * compute the ATH for each scalefactor band cd range: 0..96db
+     *
+     * Input: 3.3kHz signal 32767 amplitude (3.3kHz is where ATH is smallest =
+     * -5db) longblocks: sfb=12 en0/bw=-11db max_en0 = 1.3db shortblocks: sfb=5
+     * -9db 0db
+     *
+     * Input: 1 1 1 1 1 1 1 -1 -1 -1 -1 -1 -1 -1 (repeated) longblocks: amp=1
+     * sfb=12 en0/bw=-103 db max_en0 = -92db amp=32767 sfb=12 -12 db -1.4db
+     *
+     * Input: 1 1 1 1 1 1 1 -1 -1 -1 -1 -1 -1 -1 (repeated) shortblocks: amp=1
+     * sfb=5 en0/bw= -99 -86 amp=32767 sfb=5 -9 db 4db
+     *
+     *
+     * MAX energy of largest wave at 3.3kHz = 1db AVE energy of largest wave at
+     * 3.3kHz = -11db Let's take AVE: -11db = maximum signal in sfb=12. Dynamic
+     * range of CD: 96db. Therefor energy of smallest audible wave in sfb=12 =
+     * -11 - 96 = -107db = ATH at 3.3kHz.
+     *
+     * ATH formula for this wave: -5db. To adjust to LAME scaling, we need ATH =
+     * ATH_formula - 103 (db) ATH = ATH * 2.5e-10 (ener)
+     * </PRE>
+     */
+    function ATHmdct(gfp, f) {
+        var ath = psy.ATHformula(f, gfp);
+
+        ath -= NSATHSCALE;
+
+        /* modify the MDCT scaling for the ATH and convert to energy */
+        ath = Math.pow(10.0, ath / 10.0 + gfp.ATHlower);
+        return ath;
+    }
+
+    function compute_ath(gfp) {
+        var ATH_l = gfp.internal_flags.ATH.l;
+        var ATH_psfb21 = gfp.internal_flags.ATH.psfb21;
+        var ATH_s = gfp.internal_flags.ATH.s;
+        var ATH_psfb12 = gfp.internal_flags.ATH.psfb12;
+        var gfc = gfp.internal_flags;
+        var samp_freq = gfp.out_samplerate;
+
+        for (var sfb = 0; sfb < Encoder.SBMAX_l; sfb++) {
+            var start = gfc.scalefac_band.l[sfb];
+            var end = gfc.scalefac_band.l[sfb + 1];
+            ATH_l[sfb] = Float.MAX_VALUE;
+            for (var i = start; i < end; i++) {
+                var freq = i * samp_freq / (2 * 576);
+                var ATH_f = ATHmdct(gfp, freq);
+                /* freq in kHz */
+                ATH_l[sfb] = Math.min(ATH_l[sfb], ATH_f);
+            }
+        }
+
+        for (var sfb = 0; sfb < Encoder.PSFB21; sfb++) {
+            var start = gfc.scalefac_band.psfb21[sfb];
+            var end = gfc.scalefac_band.psfb21[sfb + 1];
+            ATH_psfb21[sfb] = Float.MAX_VALUE;
+            for (var i = start; i < end; i++) {
+                var freq = i * samp_freq / (2 * 576);
+                var ATH_f = ATHmdct(gfp, freq);
+                /* freq in kHz */
+                ATH_psfb21[sfb] = Math.min(ATH_psfb21[sfb], ATH_f);
+            }
+        }
+
+        for (var sfb = 0; sfb < Encoder.SBMAX_s; sfb++) {
+            var start = gfc.scalefac_band.s[sfb];
+            var end = gfc.scalefac_band.s[sfb + 1];
+            ATH_s[sfb] = Float.MAX_VALUE;
+            for (var i = start; i < end; i++) {
+                var freq = i * samp_freq / (2 * 192);
+                var ATH_f = ATHmdct(gfp, freq);
+                /* freq in kHz */
+                ATH_s[sfb] = Math.min(ATH_s[sfb], ATH_f);
+            }
+            ATH_s[sfb] *= (gfc.scalefac_band.s[sfb + 1] - gfc.scalefac_band.s[sfb]);
+        }
+
+        for (var sfb = 0; sfb < Encoder.PSFB12; sfb++) {
+            var start = gfc.scalefac_band.psfb12[sfb];
+            var end = gfc.scalefac_band.psfb12[sfb + 1];
+            ATH_psfb12[sfb] = Float.MAX_VALUE;
+            for (var i = start; i < end; i++) {
+                var freq = i * samp_freq / (2 * 192);
+                var ATH_f = ATHmdct(gfp, freq);
+                /* freq in kHz */
+                ATH_psfb12[sfb] = Math.min(ATH_psfb12[sfb], ATH_f);
+            }
+            /* not sure about the following */
+            ATH_psfb12[sfb] *= (gfc.scalefac_band.s[13] - gfc.scalefac_band.s[12]);
+        }
+
+        /*
+         * no-ATH mode: reduce ATH to -200 dB
+         */
+        if (gfp.noATH) {
+            for (var sfb = 0; sfb < Encoder.SBMAX_l; sfb++) {
+                ATH_l[sfb] = 1E-20;
+            }
+            for (var sfb = 0; sfb < Encoder.PSFB21; sfb++) {
+                ATH_psfb21[sfb] = 1E-20;
+            }
+            for (var sfb = 0; sfb < Encoder.SBMAX_s; sfb++) {
+                ATH_s[sfb] = 1E-20;
+            }
+            for (var sfb = 0; sfb < Encoder.PSFB12; sfb++) {
+                ATH_psfb12[sfb] = 1E-20;
+            }
+        }
+
+        /*
+         * work in progress, don't rely on it too much
+         */
+        gfc.ATH.floor = 10. * Math.log10(ATHmdct(gfp, -1.));
+    }
+
+    /**
+     * initialization for iteration_loop
+     */
+    this.iteration_init = function (gfp) {
+        var gfc = gfp.internal_flags;
+        var l3_side = gfc.l3_side;
+        var i;
+
+        if (gfc.iteration_init_init == 0) {
+            gfc.iteration_init_init = 1;
+
+            l3_side.main_data_begin = 0;
+            compute_ath(gfp);
+
+            pow43[0] = 0.0;
+            for (i = 1; i < PRECALC_SIZE; i++)
+                pow43[i] = Math.pow(i, 4.0 / 3.0);
+
+            for (i = 0; i < PRECALC_SIZE - 1; i++)
+                adj43[i] = ((i + 1) - Math.pow(
+                    0.5 * (pow43[i] + pow43[i + 1]), 0.75));
+            adj43[i] = 0.5;
+
+            for (i = 0; i < Q_MAX; i++)
+                ipow20[i] = Math.pow(2.0, (i - 210) * -0.1875);
+            for (i = 0; i <= Q_MAX + Q_MAX2; i++)
+                pow20[i] = Math.pow(2.0, (i - 210 - Q_MAX2) * 0.25);
+
+            tak.huffman_init(gfc);
+
+            {
+                var bass, alto, treble, sfb21;
+
+                i = (gfp.exp_nspsytune >> 2) & 63;
+                if (i >= 32)
+                    i -= 64;
+                bass = Math.pow(10, i / 4.0 / 10.0);
+
+                i = (gfp.exp_nspsytune >> 8) & 63;
+                if (i >= 32)
+                    i -= 64;
+                alto = Math.pow(10, i / 4.0 / 10.0);
+
+                i = (gfp.exp_nspsytune >> 14) & 63;
+                if (i >= 32)
+                    i -= 64;
+                treble = Math.pow(10, i / 4.0 / 10.0);
+
+                /*
+                 * to be compatible with Naoki's original code, the next 6 bits
+                 * define only the amount of changing treble for sfb21
+                 */
+                i = (gfp.exp_nspsytune >> 20) & 63;
+                if (i >= 32)
+                    i -= 64;
+                sfb21 = treble * Math.pow(10, i / 4.0 / 10.0);
+                for (i = 0; i < Encoder.SBMAX_l; i++) {
+                    var f;
+                    if (i <= 6)
+                        f = bass;
+                    else if (i <= 13)
+                        f = alto;
+                    else if (i <= 20)
+                        f = treble;
+                    else
+                        f = sfb21;
+
+                    gfc.nsPsy.longfact[i] = f;
+                }
+                for (i = 0; i < Encoder.SBMAX_s; i++) {
+                    var f;
+                    if (i <= 5)
+                        f = bass;
+                    else if (i <= 10)
+                        f = alto;
+                    else if (i <= 11)
+                        f = treble;
+                    else
+                        f = sfb21;
+
+                    gfc.nsPsy.shortfact[i] = f;
+                }
+            }
+        }
+    }
+
+    /**
+     * allocate bits among 2 channels based on PE<BR>
+     * mt 6/99<BR>
+     * bugfixes rh 8/01: often allocated more than the allowed 4095 bits
+     */
+    this.on_pe = function (gfp, pe,
+                           targ_bits, mean_bits, gr, cbr) {
+        var gfc = gfp.internal_flags;
+        var tbits = 0, bits;
+        var add_bits = new_int(2);
+        var ch;
+
+        /* allocate targ_bits for granule */
+        var mb = new MeanBits(tbits);
+        var extra_bits = rv.ResvMaxBits(gfp, mean_bits, mb, cbr);
+        tbits = mb.bits;
+        /* maximum allowed bits for this granule */
+        var max_bits = tbits + extra_bits;
+        if (max_bits > LameInternalFlags.MAX_BITS_PER_GRANULE) {
+            // hard limit per granule
+            max_bits = LameInternalFlags.MAX_BITS_PER_GRANULE;
+        }
+        for (bits = 0, ch = 0; ch < gfc.channels_out; ++ch) {
+            /******************************************************************
+             * allocate bits for each channel
+             ******************************************************************/
+            targ_bits[ch] = Math.min(LameInternalFlags.MAX_BITS_PER_CHANNEL,
+                tbits / gfc.channels_out);
+
+            add_bits[ch] = 0 | (targ_bits[ch] * pe[gr][ch] / 700.0 - targ_bits[ch]);
+
+            /* at most increase bits by 1.5*average */
+            if (add_bits[ch] > mean_bits * 3 / 4)
+                add_bits[ch] = mean_bits * 3 / 4;
+            if (add_bits[ch] < 0)
+                add_bits[ch] = 0;
+
+            if (add_bits[ch] + targ_bits[ch] > LameInternalFlags.MAX_BITS_PER_CHANNEL)
+                add_bits[ch] = Math.max(0,
+                    LameInternalFlags.MAX_BITS_PER_CHANNEL - targ_bits[ch]);
+
+            bits += add_bits[ch];
+        }
+        if (bits > extra_bits) {
+            for (ch = 0; ch < gfc.channels_out; ++ch) {
+                add_bits[ch] = extra_bits * add_bits[ch] / bits;
+            }
+        }
+
+        for (ch = 0; ch < gfc.channels_out; ++ch) {
+            targ_bits[ch] += add_bits[ch];
+            extra_bits -= add_bits[ch];
+        }
+
+        for (bits = 0, ch = 0; ch < gfc.channels_out; ++ch) {
+            bits += targ_bits[ch];
+        }
+        if (bits > LameInternalFlags.MAX_BITS_PER_GRANULE) {
+            var sum = 0;
+            for (ch = 0; ch < gfc.channels_out; ++ch) {
+                targ_bits[ch] *= LameInternalFlags.MAX_BITS_PER_GRANULE;
+                targ_bits[ch] /= bits;
+                sum += targ_bits[ch];
+            }
+        }
+
+        return max_bits;
+    }
+
+    this.reduce_side = function (targ_bits, ms_ener_ratio, mean_bits, max_bits) {
+
+        /*
+         * ms_ener_ratio = 0: allocate 66/33 mid/side fac=.33 ms_ener_ratio =.5:
+         * allocate 50/50 mid/side fac= 0
+         */
+        /* 75/25 split is fac=.5 */
+        var fac = .33 * (.5 - ms_ener_ratio) / .5;
+        if (fac < 0)
+            fac = 0;
+        if (fac > .5)
+            fac = .5;
+
+        /* number of bits to move from side channel to mid channel */
+        /* move_bits = fac*targ_bits[1]; */
+        var move_bits = 0 | (fac * .5 * (targ_bits[0] + targ_bits[1]));
+
+        if (move_bits > LameInternalFlags.MAX_BITS_PER_CHANNEL - targ_bits[0]) {
+            move_bits = LameInternalFlags.MAX_BITS_PER_CHANNEL - targ_bits[0];
+        }
+        if (move_bits < 0)
+            move_bits = 0;
+
+        if (targ_bits[1] >= 125) {
+            /* dont reduce side channel below 125 bits */
+            if (targ_bits[1] - move_bits > 125) {
+
+                /* if mid channel already has 2x more than average, dont bother */
+                /* mean_bits = bits per granule (for both channels) */
+                if (targ_bits[0] < mean_bits)
+                    targ_bits[0] += move_bits;
+                targ_bits[1] -= move_bits;
+            } else {
+                targ_bits[0] += targ_bits[1] - 125;
+                targ_bits[1] = 125;
+            }
+        }
+
+        move_bits = targ_bits[0] + targ_bits[1];
+        if (move_bits > max_bits) {
+            targ_bits[0] = (max_bits * targ_bits[0]) / move_bits;
+            targ_bits[1] = (max_bits * targ_bits[1]) / move_bits;
+        }
+    };
+
+    /**
+     *  Robert Hegemann 2001-04-27:
+     *  this adjusts the ATH, keeping the original noise floor
+     *  affects the higher frequencies more than the lower ones
+     */
+    this.athAdjust = function (a, x, athFloor) {
+        /*
+         * work in progress
+         */
+        var o = 90.30873362;
+        var p = 94.82444863;
+        var u = Util.FAST_LOG10_X(x, 10.0);
+        var v = a * a;
+        var w = 0.0;
+        u -= athFloor;
+        /* undo scaling */
+        if (v > 1E-20)
+            w = 1. + Util.FAST_LOG10_X(v, 10.0 / o);
+        if (w < 0)
+            w = 0.;
+        u *= w;
+        u += athFloor + o - p;
+        /* redo scaling */
+
+        return Math.pow(10., 0.1 * u);
+    };
+
+    /**
+     * Calculate the allowed distortion for each scalefactor band, as determined
+     * by the psychoacoustic model. xmin(sb) = ratio(sb) * en(sb) / bw(sb)
+     *
+     * returns number of sfb's with energy > ATH
+     */
+    this.calc_xmin = function (gfp, ratio, cod_info, pxmin) {
+        var pxminPos = 0;
+        var gfc = gfp.internal_flags;
+        var gsfb, j = 0, ath_over = 0;
+        var ATH = gfc.ATH;
+        var xr = cod_info.xr;
+        var enable_athaa_fix = (gfp.VBR == VbrMode.vbr_mtrh) ? 1 : 0;
+        var masking_lower = gfc.masking_lower;
+
+        if (gfp.VBR == VbrMode.vbr_mtrh || gfp.VBR == VbrMode.vbr_mt) {
+            /* was already done in PSY-Model */
+            masking_lower = 1.0;
+        }
+
+        for (gsfb = 0; gsfb < cod_info.psy_lmax; gsfb++) {
+            var en0, xmin;
+            var rh1, rh2;
+            var width, l;
+
+            if (gfp.VBR == VbrMode.vbr_rh || gfp.VBR == VbrMode.vbr_mtrh)
+                xmin = athAdjust(ATH.adjust, ATH.l[gsfb], ATH.floor);
+            else
+                xmin = ATH.adjust * ATH.l[gsfb];
+
+            width = cod_info.width[gsfb];
+            rh1 = xmin / width;
+            rh2 = DBL_EPSILON;
+            l = width >> 1;
+            en0 = 0.0;
+            do {
+                var xa, xb;
+                xa = xr[j] * xr[j];
+                en0 += xa;
+                rh2 += (xa < rh1) ? xa : rh1;
+                j++;
+                xb = xr[j] * xr[j];
+                en0 += xb;
+                rh2 += (xb < rh1) ? xb : rh1;
+                j++;
+            } while (--l > 0);
+            if (en0 > xmin)
+                ath_over++;
+
+            if (gsfb == Encoder.SBPSY_l) {
+                var x = xmin * gfc.nsPsy.longfact[gsfb];
+                if (rh2 < x) {
+                    rh2 = x;
+                }
+            }
+            if (enable_athaa_fix != 0) {
+                xmin = rh2;
+            }
+            if (!gfp.ATHonly) {
+                var e = ratio.en.l[gsfb];
+                if (e > 0.0) {
+                    var x;
+                    x = en0 * ratio.thm.l[gsfb] * masking_lower / e;
+                    if (enable_athaa_fix != 0)
+                        x *= gfc.nsPsy.longfact[gsfb];
+                    if (xmin < x)
+                        xmin = x;
+                }
+            }
+            if (enable_athaa_fix != 0)
+                pxmin[pxminPos++] = xmin;
+            else
+                pxmin[pxminPos++] = xmin * gfc.nsPsy.longfact[gsfb];
+        }
+        /* end of long block loop */
+
+        /* use this function to determine the highest non-zero coeff */
+        var max_nonzero = 575;
+        if (cod_info.block_type != Encoder.SHORT_TYPE) {
+            // NORM, START or STOP type, but not SHORT
+            var k = 576;
+            while (k-- != 0 && BitStream.EQ(xr[k], 0)) {
+                max_nonzero = k;
+            }
+        }
+        cod_info.max_nonzero_coeff = max_nonzero;
+
+        for (var sfb = cod_info.sfb_smin; gsfb < cod_info.psymax; sfb++, gsfb += 3) {
+            var width, b;
+            var tmpATH;
+            if (gfp.VBR == VbrMode.vbr_rh || gfp.VBR == VbrMode.vbr_mtrh)
+                tmpATH = athAdjust(ATH.adjust, ATH.s[sfb], ATH.floor);
+            else
+                tmpATH = ATH.adjust * ATH.s[sfb];
+
+            width = cod_info.width[gsfb];
+            for (b = 0; b < 3; b++) {
+                var en0 = 0.0, xmin;
+                var rh1, rh2;
+                var l = width >> 1;
+
+                rh1 = tmpATH / width;
+                rh2 = DBL_EPSILON;
+                do {
+                    var xa, xb;
+                    xa = xr[j] * xr[j];
+                    en0 += xa;
+                    rh2 += (xa < rh1) ? xa : rh1;
+                    j++;
+                    xb = xr[j] * xr[j];
+                    en0 += xb;
+                    rh2 += (xb < rh1) ? xb : rh1;
+                    j++;
+                } while (--l > 0);
+                if (en0 > tmpATH)
+                    ath_over++;
+                if (sfb == Encoder.SBPSY_s) {
+                    var x = tmpATH * gfc.nsPsy.shortfact[sfb];
+                    if (rh2 < x) {
+                        rh2 = x;
+                    }
+                }
+                if (enable_athaa_fix != 0)
+                    xmin = rh2;
+                else
+                    xmin = tmpATH;
+
+                if (!gfp.ATHonly && !gfp.ATHshort) {
+                    var e = ratio.en.s[sfb][b];
+                    if (e > 0.0) {
+                        var x;
+                        x = en0 * ratio.thm.s[sfb][b] * masking_lower / e;
+                        if (enable_athaa_fix != 0)
+                            x *= gfc.nsPsy.shortfact[sfb];
+                        if (xmin < x)
+                            xmin = x;
+                    }
+                }
+                if (enable_athaa_fix != 0)
+                    pxmin[pxminPos++] = xmin;
+                else
+                    pxmin[pxminPos++] = xmin * gfc.nsPsy.shortfact[sfb];
+            }
+            /* b */
+            if (gfp.useTemporal) {
+                if (pxmin[pxminPos - 3] > pxmin[pxminPos - 3 + 1])
+                    pxmin[pxminPos - 3 + 1] += (pxmin[pxminPos - 3] - pxmin[pxminPos - 3 + 1])
+                        * gfc.decay;
+                if (pxmin[pxminPos - 3 + 1] > pxmin[pxminPos - 3 + 2])
+                    pxmin[pxminPos - 3 + 2] += (pxmin[pxminPos - 3 + 1] - pxmin[pxminPos - 3 + 2])
+                        * gfc.decay;
+            }
+        }
+        /* end of short block sfb loop */
+
+        return ath_over;
+    };
+
+    function StartLine(j) {
+        this.s = j;
+    }
+
+    this.calc_noise_core = function (cod_info, startline, l, step) {
+        var noise = 0;
+        var j = startline.s;
+        var ix = cod_info.l3_enc;
+
+        if (j > cod_info.count1) {
+            while ((l--) != 0) {
+                var temp;
+                temp = cod_info.xr[j];
+                j++;
+                noise += temp * temp;
+                temp = cod_info.xr[j];
+                j++;
+                noise += temp * temp;
+            }
+        } else if (j > cod_info.big_values) {
+            var ix01 = new_float(2);
+            ix01[0] = 0;
+            ix01[1] = step;
+            while ((l--) != 0) {
+                var temp;
+                temp = Math.abs(cod_info.xr[j]) - ix01[ix[j]];
+                j++;
+                noise += temp * temp;
+                temp = Math.abs(cod_info.xr[j]) - ix01[ix[j]];
+                j++;
+                noise += temp * temp;
+            }
+        } else {
+            while ((l--) != 0) {
+                var temp;
+                temp = Math.abs(cod_info.xr[j]) - pow43[ix[j]] * step;
+                j++;
+                noise += temp * temp;
+                temp = Math.abs(cod_info.xr[j]) - pow43[ix[j]] * step;
+                j++;
+                noise += temp * temp;
+            }
+        }
+
+        startline.s = j;
+        return noise;
+    }
+
+    /**
+     * <PRE>
+     * -oo dB  =>  -1.00
+     * - 6 dB  =>  -0.97
+     * - 3 dB  =>  -0.80
+     * - 2 dB  =>  -0.64
+     * - 1 dB  =>  -0.38
+     *   0 dB  =>   0.00
+     * + 1 dB  =>  +0.49
+     * + 2 dB  =>  +1.06
+     * + 3 dB  =>  +1.68
+     * + 6 dB  =>  +3.69
+     * +10 dB  =>  +6.45
+     * </PRE>
+     */
+    this.calc_noise = function (cod_info, l3_xmin, distort, res, prev_noise) {
+        var distortPos = 0;
+        var l3_xminPos = 0;
+        var sfb, l, over = 0;
+        var over_noise_db = 0;
+        /* 0 dB relative to masking */
+        var tot_noise_db = 0;
+        /* -200 dB relative to masking */
+        var max_noise = -20.0;
+        var j = 0;
+        var scalefac = cod_info.scalefac;
+        var scalefacPos = 0;
+
+        res.over_SSD = 0;
+
+        for (sfb = 0; sfb < cod_info.psymax; sfb++) {
+            var s = cod_info.global_gain
+                - (((scalefac[scalefacPos++]) + (cod_info.preflag != 0 ? pretab[sfb]
+                    : 0)) << (cod_info.scalefac_scale + 1))
+                - cod_info.subblock_gain[cod_info.window[sfb]] * 8;
+            var noise = 0.0;
+
+            if (prev_noise != null && (prev_noise.step[sfb] == s)) {
+
+                /* use previously computed values */
+                noise = prev_noise.noise[sfb];
+                j += cod_info.width[sfb];
+                distort[distortPos++] = noise / l3_xmin[l3_xminPos++];
+
+                noise = prev_noise.noise_log[sfb];
+
+            } else {
+                var step = POW20(s);
+                l = cod_info.width[sfb] >> 1;
+
+                if ((j + cod_info.width[sfb]) > cod_info.max_nonzero_coeff) {
+                    var usefullsize;
+                    usefullsize = cod_info.max_nonzero_coeff - j + 1;
+
+                    if (usefullsize > 0)
+                        l = usefullsize >> 1;
+                    else
+                        l = 0;
+                }
+
+                var sl = new StartLine(j);
+                noise = this.calc_noise_core(cod_info, sl, l, step);
+                j = sl.s;
+
+                if (prev_noise != null) {
+                    /* save noise values */
+                    prev_noise.step[sfb] = s;
+                    prev_noise.noise[sfb] = noise;
+                }
+
+                noise = distort[distortPos++] = noise / l3_xmin[l3_xminPos++];
+
+                /* multiplying here is adding in dB, but can overflow */
+                noise = Util.FAST_LOG10(Math.max(noise, 1E-20));
+
+                if (prev_noise != null) {
+                    /* save noise values */
+                    prev_noise.noise_log[sfb] = noise;
+                }
+            }
+
+            if (prev_noise != null) {
+                /* save noise values */
+                prev_noise.global_gain = cod_info.global_gain;
+            }
+
+            tot_noise_db += noise;
+
+            if (noise > 0.0) {
+                var tmp;
+
+                tmp = Math.max(0 | (noise * 10 + .5), 1);
+                res.over_SSD += tmp * tmp;
+
+                over++;
+                /* multiplying here is adding in dB -but can overflow */
+                /* over_noise *= noise; */
+                over_noise_db += noise;
+            }
+            max_noise = Math.max(max_noise, noise);
+
+        }
+
+        res.over_count = over;
+        res.tot_noise = tot_noise_db;
+        res.over_noise = over_noise_db;
+        res.max_noise = max_noise;
+
+        return over;
+    }
+
+    /**
+     * updates plotting data
+     *
+     * Mark Taylor 2000-??-??
+     *
+     * Robert Hegemann: moved noise/distortion calc into it
+     */
+    this.set_pinfo = function (gfp, cod_info, ratio, gr, ch) {
+        var gfc = gfp.internal_flags;
+        var sfb, sfb2;
+        var l;
+        var en0, en1;
+        var ifqstep = (cod_info.scalefac_scale == 0) ? .5 : 1.0;
+        var scalefac = cod_info.scalefac;
+
+        var l3_xmin = new_float(L3Side.SFBMAX);
+        var xfsf = new_float(L3Side.SFBMAX);
+        var noise = new CalcNoiseResult();
+
+        calc_xmin(gfp, ratio, cod_info, l3_xmin);
+        calc_noise(cod_info, l3_xmin, xfsf, noise, null);
+
+        var j = 0;
+        sfb2 = cod_info.sfb_lmax;
+        if (cod_info.block_type != Encoder.SHORT_TYPE
+            && 0 == cod_info.mixed_block_flag)
+            sfb2 = 22;
+        for (sfb = 0; sfb < sfb2; sfb++) {
+            var start = gfc.scalefac_band.l[sfb];
+            var end = gfc.scalefac_band.l[sfb + 1];
+            var bw = end - start;
+            for (en0 = 0.0; j < end; j++)
+                en0 += cod_info.xr[j] * cod_info.xr[j];
+            en0 /= bw;
+            /* convert to MDCT units */
+            /* scaling so it shows up on FFT plot */
+            en1 = 1e15;
+            gfc.pinfo.en[gr][ch][sfb] = en1 * en0;
+            gfc.pinfo.xfsf[gr][ch][sfb] = en1 * l3_xmin[sfb] * xfsf[sfb] / bw;
+
+            if (ratio.en.l[sfb] > 0 && !gfp.ATHonly)
+                en0 = en0 / ratio.en.l[sfb];
+            else
+                en0 = 0.0;
+
+            gfc.pinfo.thr[gr][ch][sfb] = en1
+                * Math.max(en0 * ratio.thm.l[sfb], gfc.ATH.l[sfb]);
+
+            /* there is no scalefactor bands >= SBPSY_l */
+            gfc.pinfo.LAMEsfb[gr][ch][sfb] = 0;
+            if (cod_info.preflag != 0 && sfb >= 11)
+                gfc.pinfo.LAMEsfb[gr][ch][sfb] = -ifqstep * pretab[sfb];
+
+            if (sfb < Encoder.SBPSY_l) {
+                /* scfsi should be decoded by caller side */
+                gfc.pinfo.LAMEsfb[gr][ch][sfb] -= ifqstep * scalefac[sfb];
+            }
+        }
+        /* for sfb */
+
+        if (cod_info.block_type == Encoder.SHORT_TYPE) {
+            sfb2 = sfb;
+            for (sfb = cod_info.sfb_smin; sfb < Encoder.SBMAX_s; sfb++) {
+                var start = gfc.scalefac_band.s[sfb];
+                var end = gfc.scalefac_band.s[sfb + 1];
+                var bw = end - start;
+                for (var i = 0; i < 3; i++) {
+                    for (en0 = 0.0, l = start; l < end; l++) {
+                        en0 += cod_info.xr[j] * cod_info.xr[j];
+                        j++;
+                    }
+                    en0 = Math.max(en0 / bw, 1e-20);
+                    /* convert to MDCT units */
+                    /* scaling so it shows up on FFT plot */
+                    en1 = 1e15;
+
+                    gfc.pinfo.en_s[gr][ch][3 * sfb + i] = en1 * en0;
+                    gfc.pinfo.xfsf_s[gr][ch][3 * sfb + i] = en1 * l3_xmin[sfb2]
+                        * xfsf[sfb2] / bw;
+                    if (ratio.en.s[sfb][i] > 0)
+                        en0 = en0 / ratio.en.s[sfb][i];
+                    else
+                        en0 = 0.0;
+                    if (gfp.ATHonly || gfp.ATHshort)
+                        en0 = 0;
+
+                    gfc.pinfo.thr_s[gr][ch][3 * sfb + i] = en1
+                        * Math.max(en0 * ratio.thm.s[sfb][i],
+                            gfc.ATH.s[sfb]);
+
+                    /* there is no scalefactor bands >= SBPSY_s */
+                    gfc.pinfo.LAMEsfb_s[gr][ch][3 * sfb + i] = -2.0
+                        * cod_info.subblock_gain[i];
+                    if (sfb < Encoder.SBPSY_s) {
+                        gfc.pinfo.LAMEsfb_s[gr][ch][3 * sfb + i] -= ifqstep
+                            * scalefac[sfb2];
+                    }
+                    sfb2++;
+                }
+            }
+        }
+        /* block type short */
+        gfc.pinfo.LAMEqss[gr][ch] = cod_info.global_gain;
+        gfc.pinfo.LAMEmainbits[gr][ch] = cod_info.part2_3_length
+            + cod_info.part2_length;
+        gfc.pinfo.LAMEsfbits[gr][ch] = cod_info.part2_length;
+
+        gfc.pinfo.over[gr][ch] = noise.over_count;
+        gfc.pinfo.max_noise[gr][ch] = noise.max_noise * 10.0;
+        gfc.pinfo.over_noise[gr][ch] = noise.over_noise * 10.0;
+        gfc.pinfo.tot_noise[gr][ch] = noise.tot_noise * 10.0;
+        gfc.pinfo.over_SSD[gr][ch] = noise.over_SSD;
+    }
+
+    /**
+     * updates plotting data for a whole frame
+     *
+     * Robert Hegemann 2000-10-21
+     */
+    function set_frame_pinfo(gfp, ratio) {
+        var gfc = gfp.internal_flags;
+
+        gfc.masking_lower = 1.0;
+
+        /*
+         * for every granule and channel patch l3_enc and set info
+         */
+        for (var gr = 0; gr < gfc.mode_gr; gr++) {
+            for (var ch = 0; ch < gfc.channels_out; ch++) {
+                var cod_info = gfc.l3_side.tt[gr][ch];
+                var scalefac_sav = new_int(L3Side.SFBMAX);
+                System.arraycopy(cod_info.scalefac, 0, scalefac_sav, 0,
+                    scalefac_sav.length);
+
+                /*
+                 * reconstruct the scalefactors in case SCFSI was used
+                 */
+                if (gr == 1) {
+                    var sfb;
+                    for (sfb = 0; sfb < cod_info.sfb_lmax; sfb++) {
+                        if (cod_info.scalefac[sfb] < 0) /* scfsi */
+                            cod_info.scalefac[sfb] = gfc.l3_side.tt[0][ch].scalefac[sfb];
+                    }
+                }
+
+                set_pinfo(gfp, cod_info, ratio[gr][ch], gr, ch);
+                System.arraycopy(scalefac_sav, 0, cod_info.scalefac, 0,
+                    scalefac_sav.length);
+            }
+            /* for ch */
+        }
+        /* for gr */
     }
 
 }
@@ -15511,7 +15511,7 @@ function testFullLength() {
     var w = WavHeader.readHeader(new DataView(sampleBuf));
     var samples = new Int16Array(sampleBuf, w.dataOffset, w.dataLen / 2);
     var remaining = samples.length;
-    var lameEnc = new Mp3Encoder(w.channels, w.sampleRate, 16);
+    var lameEnc = new Mp3Encoder(); //w.channels, w.sampleRate, 128);
     var maxSamples = 1152;
 
     var fd = fs.openSync("testjs2.mp3", "w");
