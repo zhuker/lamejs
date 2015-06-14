@@ -120,13 +120,18 @@ GainAnalysis.INIT_GAIN_ANALYSIS_OK = 1;
 GainAnalysis.YULE_ORDER = 10;
 GainAnalysis.MAX_ORDER = GainAnalysis.YULE_ORDER;
 
+GainAnalysis.MAX_SAMP_FREQ = 48000;
+GainAnalysis.RMS_WINDOW_TIME_NUMERATOR = 1;
+GainAnalysis.RMS_WINDOW_TIME_DENOMINATOR = 20;
+GainAnalysis.MAX_SAMPLES_PER_WINDOW = ((GainAnalysis.MAX_SAMP_FREQ * GainAnalysis.RMS_WINDOW_TIME_NUMERATOR) / GainAnalysis.RMS_WINDOW_TIME_DENOMINATOR + 1);
+
 function GainAnalysis() {
     /**
      * calibration value for 89dB
      */
     var PINK_REF = 64.82;
 
-    var YULE_ORDER = 10;
+    var YULE_ORDER = GainAnalysis.YULE_ORDER;
     /**
      * percentile which is louder than the proposed level
      */
@@ -134,16 +139,16 @@ function GainAnalysis() {
     /**
      * maximum allowed sample frequency [Hz]
      */
-    var MAX_SAMP_FREQ = 48000;
-    var RMS_WINDOW_TIME_NUMERATOR = 1;
+    var MAX_SAMP_FREQ = GainAnalysis.MAX_SAMP_FREQ;
+    var RMS_WINDOW_TIME_NUMERATOR = GainAnalysis.RMS_WINDOW_TIME_NUMERATOR;
     /**
      * numerator / denominator = time slice size [s]
      */
-    var RMS_WINDOW_TIME_DENOMINATOR = 20;
+    var RMS_WINDOW_TIME_DENOMINATOR = GainAnalysis.RMS_WINDOW_TIME_DENOMINATOR;
     /**
      * max. Samples per Time slice
      */
-    var MAX_SAMPLES_PER_WINDOW = ((MAX_SAMP_FREQ * RMS_WINDOW_TIME_NUMERATOR) / RMS_WINDOW_TIME_DENOMINATOR + 1);
+    var MAX_SAMPLES_PER_WINDOW = GainAnalysis.MAX_SAMPLES_PER_WINDOW;
 
 
     var ABYule = [
