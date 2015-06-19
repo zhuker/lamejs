@@ -11,6 +11,9 @@ lib = new lamejs();
 mp3encoder = new lib.Mp3Encoder(1, 44100, 128); //mono 44.1khz encode to 128kbps
 samples = new Int16Array(44100); //one second of silence
 var mp3 = mp3encoder.encodeBuffer(samples); //encode mp3
+//write mp3 here
+mp3 = mp3encoder.flush();
+//write mp3 here
 ```
 
 # Real Example
