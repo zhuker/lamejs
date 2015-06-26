@@ -5,3 +5,4 @@ target/*
 *.jar
 .project
 .classpath
+node_modules

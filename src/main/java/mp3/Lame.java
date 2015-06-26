@@ -1933,9 +1933,9 @@ public class Lame {
 		/* make a copy of input buffer, changing type to sample_t */
 		for (int i = 0; i < nsamples; i++) {
 			/* internal code expects +/- 32768.0 */
-			in_buffer[0][i] = buffer_l[i] * (1.0f / (1L << (16)));
+			in_buffer[0][i] = buffer_l[i];
 			if (gfc.channels_in > 1)
-				in_buffer[1][i] = buffer_r[i] * (1.0f / (1L << (16)));
+				in_buffer[1][i] = buffer_r[i];
 		}
 
 		return lame_encode_buffer_sample(gfp, in_buffer[0], in_buffer[1],
