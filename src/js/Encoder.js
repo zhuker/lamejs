@@ -495,7 +495,7 @@ function Encoder() {
             /* no psy model */
             for (gr = 0; gr < gfc.mode_gr; gr++)
                 for (ch = 0; ch < gfc.channels_out; ch++) {
-                    gfc.l3_side.tt[gr][ch].block_type = NORM_TYPE;
+                    gfc.l3_side.tt[gr][ch].block_type = Encoder.NORM_TYPE;
                     gfc.l3_side.tt[gr][ch].mixed_block_flag = 0;
                     pe_MS[gr][ch] = pe[gr][ch] = 700;
                 }
