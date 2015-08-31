@@ -7,13 +7,26 @@ lamejs is a rewrite of jump3r-code which is a rewrite of libmp3lame.
 
 ```javascript
 <script src='lame.all.js'></script>
-lib = new lamejs();
-mp3encoder = new lib.Mp3Encoder(1, 44100, 128); //mono 44.1khz encode to 128kbps
-samples = new Int16Array(44100); //one second of silence
-var mp3 = mp3encoder.encodeBuffer(samples); //encode mp3
-//write mp3 here
-mp3 = mp3encoder.flush();
-//write mp3 here
+<script>
+var lib = new lamejs();
+var mp3Data = [];
+
+var mp3encoder = new lib.Mp3Encoder(1, 44100, 128); //mono 44.1khz encode to 128kbps
+var samples = new Int16Array(44100); //one second of silence replace that with your own samples
+var mp3Tmp = mp3encoder.encodeBuffer(samples); //encode mp3
+
+//Push encode buffer to mp3Data variable
+mp3Data.push(mp3Tmp);
+
+// Get end part of mp3
+mp3Tmp = mp3encoder.flush();
+
+// Write last data to the output data, too
+// mp3Data contains now the complete mp3Data
+mp3Data.push(mp3Tmp);
+
+console.debug(mp3Data);
+</script>
 ```
 
 # Real Example
@@ -28,6 +41,7 @@ channels = 1; //1 for mono or 2 for stereo
 sampleRate = 44100; //44.1khz (normal mp3 samplerate)
 kbps = 128; //encode 128kbps mp3
 mp3encoder = new lib.Mp3Encoder(channels, sampleRate, kbps);
+var mp3Data = [];
 
 samples = new Int16Array(44100); //one second of silence (get your data from the source you have)
 sampleBlockSize = 1152; //can be anything but make it a multiple of 576 to make encoders life easier
@@ -36,14 +50,16 @@ for (var i = 0; i < samples.length; i += sampleBlockSize) {
   sampleChunk = samples.subarray(i, i + sampleBlockSize);
   var mp3buf = mp3encoder.encodeBuffer(sampleChunk);
   if (mp3buf.length > 0) {
-    //TODO: write your mp3 here
+      mp3Data.push(mp3buf);
   }
 }
 var mp3buf = mp3encoder.flush();   //finish writing mp3
 
 if (mp3buf.length > 0) {
-    //TODO: finish writing your mp3 here
+    mp3Data.push(mp3buf);
 }
+
+console.debug(mp3Data);
 </script>
 ```
 
@@ -56,6 +72,7 @@ If you want to encode stereo mp3 use separate sample buffers for left and right 
 <script>
 lib = new lamejs();
 mp3encoder = new lib.Mp3Encoder(2, 44100, 128);
+var mp3Data = [];
 
 left = new Int16Array(44100); //one second of silence (get your data from the source you have)
 right = new Int16Array(44100); //one second of silence (get your data from the source you have)
@@ -66,14 +83,16 @@ for (var i = 0; i < samples.length; i += sampleBlockSize) {
   rightChunk = right.subarray(i, i + sampleBlockSize);
   var mp3buf = mp3encoder.encodeBuffer(leftChunk, rightChunk);
   if (mp3buf.length > 0) {
-    //TODO: write your mp3 here
+    mp3Data.push(mp3buf);
   }
 }
 var mp3buf = mp3encoder.flush();   //finish writing mp3
 
 if (mp3buf.length > 0) {
-    //TODO: finish writing your mp3 here
+    mp3Data.push(mp3buf);
 }
+
+console.log(mp3Data);
 </script>
 ```
 
