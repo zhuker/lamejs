@@ -5,7 +5,10 @@
 <script>
     liblame = new lamejs();
 
+
+
     function encodeMono(channels, sampleRate, samples) {
+        var buffer = [];
         mp3enc = new liblame.Mp3Encoder(channels, sampleRate, 128);
         var remaining = samples.length;
         var maxSamples = 1152;
@@ -13,12 +16,23 @@
             var mono = samples.subarray(i, i + maxSamples);
             var mp3buf = mp3enc.encodeBuffer(mono);
             if (mp3buf.length > 0) {
-                //TODO write to output
+                buffer.push(new Int8Array(mp3buf));
             }
             remaining -= maxSamples;
         }
-        var mp3buf = mp3enc.flush();
-        console.log('done encoding');
+        var d = mp3enc.flush();
+        if(d.length > 0){
+            buffer.push(new Int8Array(d));
+        }
+
+        console.log('done encoding, size=', buffer.length);
+        var blob = new Blob(buffer, {type: 'audio/mp3'});
+        var bUrl = window.URL.createObjectURL(blob);
+        console.log('Blob created, URL:', bUrl);
+        window.myAudioPlayer = document.createElement('audio');
+        window.myAudioPlayer.src = bUrl;
+        window.myAudioPlayer.setAttribute('controls', '');
+        window.myAudioPlayer.play();
     }
 
     var wavFile = "testdata/Left44100.wav";
@@ -32,7 +46,7 @@
         audioData = request.response;
         wav = liblame.WavHeader.readHeader(new DataView(audioData));
         console.log('wav:', wav);
-        samples = new Uint16Array(audioData, wav.dataOffset, wav.dataLen / 2);
+        samples = new Int16Array(audioData, wav.dataOffset, wav.dataLen / 2);
         encodeMono(wav.channels, wav.sampleRate, samples);
     };
     request.send();
