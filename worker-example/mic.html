@@ -40,11 +40,14 @@
             var btn = $(this);
             recorder.start(function () {
                 //start timer,
-                var seconds = 0;
+                var seconds = 0, updateTimer = function(){
+                    $('#timer').text(seconds < 10 ? '0' + seconds : seconds);
+                };
                 timer = setInterval(function () {
                     seconds++;
-                    $('#timer').text(seconds < 10 ? '0' + seconds : seconds);
+                    updateTimer();
                 }, 1000);
+                updateTimer();
                 //disable start button
                 btn.attr('disabled', true);
                 $('#stopBtn').removeAttr('disabled');
@@ -54,26 +57,37 @@
         });
 
 
-        $('#stopBtn').on('click', function(e){
+        $('#stopBtn').on('click', function (e) {
             e.preventDefault();
             recorder.stop();
             $(this).attr('disabled', true);
             $('#startBtn').removeAttr('disabled');
             //get MP3
             clearInterval(timer);
-            recorder.getMp3Blob(function(blob){
-                var blobUrl = window.URL.createObjectURL(blob);
-                $('ol.convertedList')
-                        .append('<li><strong> recording_' +
-                        (new Date()) +
-                        '_.mp3</strong><br/>' +
-                        '<audio controls src="' + blobUrl + '"></audio>' +
-                        '</li>');
-            }, function(e){
+            recorder.getMp3Blob(function (blob) {
+                //var blobUrl = window.URL.createObjectURL(blob);
+                blobToDataURL(blob, function(url){
+                    $('ol.convertedList')
+                            .append('<li><strong> recording_' +
+                            (new Date()) +
+                            '_.mp3</strong><br/>' +
+                            '<audio controls src="' + url + '"></audio>' +
+                            '</li>');
+                });
+            }, function (e) {
                 alert('We could not retrieve your message');
                 console.log(e);
             });
         });
+
+        function blobToDataURL(blob, callback) {
+            var a = new FileReader();
+            a.onload = function (e) {
+                callback(e.target.result);
+            }
+            a.readAsDataURL(blob);
+        }
+
     });
 </script>
 </body>

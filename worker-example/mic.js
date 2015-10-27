@@ -16,6 +16,7 @@
 
     // Initializes LAME so that we can record.
     this.initialize = function () {
+      config.sampleRate = context.sampleRate;
       realTimeWorker.postMessage({cmd: 'init', config: config});
     };
 
