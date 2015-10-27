@@ -1,0 +1,81 @@
+<html>
+<head>
+    <title>Lame.js Upload Example</title>
+    <link href="https://maxcdn.bootstrapcdn.com/bootstrap/3.3.5/css/bootstrap.min.css" rel="stylesheet"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1"/>
+</head>
+
+<body style="padding-top: 30px">
+<div class="container">
+    <div class="row">
+        <div class="col-sm-8 col-sm-offset-2 text-center">
+            <div>
+                <h3 class="text-center" id="timer"></h3>
+            </div>
+            <button class="btn btn-primary" id="startBtn">
+                <i class="glyhphicon glyhphicon-record"></i> Start
+            </button>
+
+            <button class="btn btn-primary" id="stopBtn" disabled="true">
+                <i class="glyhphicon glyhphicon-stop"></i> Stop
+            </button>
+
+            <ol class="convertedList"></ol>
+
+        </div>
+    </div>
+</div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/2.1.4/jquery.min.js"></script>
+<script src="mic.js"></script>
+<script>
+    //on document ready
+    $(function () {
+        var recorder = new MP3Recorder({
+            bitRate: 128
+        }), timer;
+
+
+        $('#startBtn').on('click', function (e) {
+            e.preventDefault();
+            var btn = $(this);
+            recorder.start(function () {
+                //start timer,
+                var seconds = 0;
+                timer = setInterval(function () {
+                    seconds++;
+                    $('#timer').text(seconds < 10 ? '0' + seconds : seconds);
+                }, 1000);
+                //disable start button
+                btn.attr('disabled', true);
+                $('#stopBtn').removeAttr('disabled');
+            }, function () {
+                alert('We could not make use of your microphone at the moment');
+            });
+        });
+
+
+        $('#stopBtn').on('click', function(e){
+            e.preventDefault();
+            recorder.stop();
+            $(this).attr('disabled', true);
+            $('#startBtn').removeAttr('disabled');
+            //get MP3
+            clearInterval(timer);
+            recorder.getMp3Blob(function(blob){
+                var blobUrl = window.URL.createObjectURL(blob);
+                $('ol.convertedList')
+                        .append('<li><strong> recording_' +
+                        (new Date()) +
+                        '_.mp3</strong><br/>' +
+                        '<audio controls src="' + blobUrl + '"></audio>' +
+                        '</li>');
+            }, function(e){
+                alert('We could not retrieve your message');
+                console.log(e);
+            });
+        });
+    });
+</script>
+</body>
+
+</html>
