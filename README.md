@@ -46,6 +46,7 @@ var mp3Data = [];
 samples = new Int16Array(44100); //one second of silence (get your data from the source you have)
 sampleBlockSize = 1152; //can be anything but make it a multiple of 576 to make encoders life easier
 
+var mp3Data = [];
 for (var i = 0; i < samples.length; i += sampleBlockSize) {
   sampleChunk = samples.subarray(i, i + sampleBlockSize);
   var mp3buf = mp3encoder.encodeBuffer(sampleChunk);
@@ -56,10 +57,12 @@ for (var i = 0; i < samples.length; i += sampleBlockSize) {
 var mp3buf = mp3encoder.flush();   //finish writing mp3
 
 if (mp3buf.length > 0) {
-    mp3Data.push(mp3buf);
+    mp3Data.push(new Int8Array(mp3buf));
 }
 
-console.debug(mp3Data);
+var blob = new Blob(mp3Data, {type: 'audio/mp3'});
+var url = window.URL.createObjectURL(blob);
+console.log('MP3 URl: ', url);
 </script>
 ```
 
@@ -95,4 +98,3 @@ if (mp3buf.length > 0) {
 console.log(mp3Data);
 </script>
 ```
-
