@@ -42,7 +42,7 @@
   var encode = function (arrayBuffer) {
     samplesMono = convertBuffer(arrayBuffer);
     var remaining = samplesMono.length;
-    for (var i = 0; remaining >= maxSamples; i += maxSamples) {
+    for (var i = 0; remaining >= 0; i += maxSamples) {
       var left = samplesMono.subarray(i, i + maxSamples);
       var mp3buf = mp3Encoder.encodeBuffer(left);
       appendToBuffer(mp3buf);
