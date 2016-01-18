@@ -18,7 +18,7 @@
 
 
   var init = function (prefConfig) {
-    config = prefConfig || {};
+    config = prefConfig || {debug: true};
     lame = new lamejs();
     mp3Encoder = new lame.Mp3Encoder(1, config.sampleRate || 44100, config.bitRate || 123);
     clearBuffer();
@@ -57,7 +57,9 @@
       cmd: 'end',
       buf: dataBuffer
     });
-    console.log('Sending finished command');
+    if (config.debug) {
+      console.log('Sending finished command');
+    }
     clearBuffer(); //free up memory
   };
 
