@@ -269,3 +269,6 @@ function testStereo44100() {
 
 //testStereo44100();
 //testFullLength();
+
+module.exports.Mp3Encoder = Mp3Encoder;
+module.exports.WavHeader = WavHeader;
