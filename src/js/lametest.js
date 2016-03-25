@@ -104,6 +104,7 @@ function Mp3Encoder(channels, samplerate, kbps) {
 
     gfp.num_channels = channels;
     gfp.in_samplerate = samplerate;
+    gfp.out_samplerate = samplerate;
     gfp.brate = kbps;
     gfp.mode = MPEGMode.STEREO;
     gfp.quality = 3;
