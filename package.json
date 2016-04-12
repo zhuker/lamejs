@@ -25,5 +25,8 @@
   "bugs": {
     "url": "https://github.com/zhuker/lamejs/issues"
   },
-  "homepage": "https://github.com/zhuker/lamejs#readme"
+  "homepage": "https://github.com/zhuker/lamejs#readme",
+  "dependencies": {
+    "use-strict": "1.0.1"
+  }
 }

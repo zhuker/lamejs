@@ -16,10 +16,9 @@ $ bower install lamejs --save
 ```javascript
 <script src='lame.all.js'></script>
 <script>
-var lib = new lamejs();
 var mp3Data = [];
 
-var mp3encoder = new lib.Mp3Encoder(1, 44100, 128); //mono 44.1khz encode to 128kbps
+var mp3encoder = new lamejs.Mp3Encoder(1, 44100, 128); //mono 44.1khz encode to 128kbps
 var samples = new Int16Array(44100); //one second of silence replace that with your own samples
 var mp3Tmp = mp3encoder.encodeBuffer(samples); //encode mp3
 
@@ -37,6 +36,18 @@ console.debug(mp3Data);
 </script>
 ```
 
+To use lamejs in Node.js build, you can install it from `npm`:
+
+```
+npm install lamejs
+```
+
+Then use it:
+
+```
+var lamejs = require("lamejs");
+```
+
 # Real Example
 
 Either see [example.html](https://github.com/zhuker/lamejs/blob/master/example.html) for full example of wav file encoding in browser or use this:
@@ -44,11 +55,10 @@ Either see [example.html](https://github.com/zhuker/lamejs/blob/master/example.h
 ```javascript
 <script src='lame.all.js'></script>
 <script>
-lib = new lamejs();
 channels = 1; //1 for mono or 2 for stereo
 sampleRate = 44100; //44.1khz (normal mp3 samplerate)
 kbps = 128; //encode 128kbps mp3
-mp3encoder = new lib.Mp3Encoder(channels, sampleRate, kbps);
+mp3encoder = new lamejs.Mp3Encoder(channels, sampleRate, kbps);
 var mp3Data = [];
 
 samples = new Int16Array(44100); //one second of silence (get your data from the source you have)
@@ -81,8 +91,7 @@ If you want to encode stereo mp3 use separate sample buffers for left and right 
 ```javascript
 <script src='lame.all.js'></script>
 <script>
-lib = new lamejs();
-mp3encoder = new lib.Mp3Encoder(2, 44100, 128);
+mp3encoder = new lamejs.Mp3Encoder(2, 44100, 128);
 var mp3Data = [];
 
 left = new Int16Array(44100); //one second of silence (get your data from the source you have)

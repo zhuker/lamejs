@@ -3,13 +3,9 @@
 </body>
 <script src="lame.all.js"></script>
 <script>
-    liblame = new lamejs();
-
-
-
     function encodeMono(channels, sampleRate, samples) {
         var buffer = [];
-        mp3enc = new liblame.Mp3Encoder(channels, sampleRate, 128);
+        var mp3enc = new lamejs.Mp3Encoder(channels, sampleRate, 128);
         var remaining = samples.length;
         var maxSamples = 1152;
         for (var i = 0; remaining >= maxSamples; i += maxSamples) {
@@ -43,10 +39,10 @@
 
     // Our asynchronous callback
     request.onload = function () {
-        audioData = request.response;
-        wav = liblame.WavHeader.readHeader(new DataView(audioData));
+        var audioData = request.response;
+        var wav = lamejs.WavHeader.readHeader(new DataView(audioData));
         console.log('wav:', wav);
-        samples = new Int16Array(audioData, wav.dataOffset, wav.dataLen / 2);
+        var samples = new Int16Array(audioData, wav.dataOffset, wav.dataLen / 2);
         encodeMono(wav.channels, wav.sampleRate, samples);
     };
     request.send();
