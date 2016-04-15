@@ -5,7 +5,7 @@
   importScripts('../lame.min.js');
 
   var mp3Encoder, maxSamples = 1152,
-    wav, samplesLeft, lame, config, dataBuffer, samplesRight;
+    wav, samplesLeft, config, dataBuffer, samplesRight;
   var clearBuffer = function () {
     dataBuffer = [];
   };
@@ -17,12 +17,11 @@
 
   var init = function (prefConfig) {
     config = prefConfig || {};
-    lame = new lamejs();
     clearBuffer();
   };
 
   var encode = function (arrayBuffer) {
-    wav = lame.WavHeader.readHeader(new DataView(arrayBuffer));
+    wav = lamejs.WavHeader.readHeader(new DataView(arrayBuffer));
     console.log('wave:', wav);
     if (!wav) {
       self.postMessage({cmd: 'error', msg: 'Specified file is not a Wave file'});
@@ -39,7 +38,7 @@
       }
     }
 
-    mp3Encoder = new lame.Mp3Encoder(wav.channels, wav.sampleRate, config.bitRate || 96);
+    mp3Encoder = new lamejs.Mp3Encoder(wav.channels, wav.sampleRate, config.bitRate || 96);
 
     var remaining = samplesLeft.length;
     for (var i = 0; remaining >= maxSamples; i += maxSamples) {
