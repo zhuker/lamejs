@@ -5,10 +5,14 @@ lamejs is a rewrite of jump3r-code which is a rewrite of libmp3lame.
 
 ## Installation
 
-To install via Bower, simply do the following:
+To install via Bower or npm, simply do the following:
 
 ```bash
 $ bower install lamejs --save
+```
+
+```bash
+$ npm install lamejs
 ```
 
 # Quick Start
