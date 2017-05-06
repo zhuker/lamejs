@@ -27,7 +27,8 @@
     function beginRecording(stream) {
       // Set up Web Audio API to process data from the media stream (microphone).
       microphone = context.createMediaStreamSource(stream);
-      processor = context.createScriptProcessor(16384, 1, 1);
+      // Settings a bufferSize of 0 instructs the browser to choose the best bufferSize
+      processor = context.createScriptProcessor(0, 1, 1);
       // Add all buffers from LAME into an array.
       processor.onaudioprocess = function (event) {
         // Send microphone data to LAME for MP3 encoding while recording.
