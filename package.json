@@ -2,13 +2,13 @@
   "name": "lamejs",
   "version": "1.1.0",
   "description": "Pure JavaScript MP3 Encoder",
-  "main": "src/js/lametest.js",
+  "main": "src/js/index.js",
   "directories": {
     "doc": "doc",
     "test": "test"
   },
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 0"
+    "test": "node src/js/Tests.js"
   },
   "repository": {
     "type": "git",
