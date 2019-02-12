@@ -1787,7 +1787,7 @@ function Lame() {
             var xvalue = 0.;
             for (i = 0; i <= filter_l; ++i) {
 		/* force integer index */
-                var j2 = Math.floor(i + j - filter_l / 2); 
+                var j2 = 0 | (i + j - filter_l / 2); 
                 var y;
                 assert(j2 < len);
                 assert(j2 + BLACKSIZE >= 0);
