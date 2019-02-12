@@ -1786,7 +1786,8 @@ function Lame() {
             joff = 0 | Math.floor((offset * 2 * bpc) + bpc + .5);
             var xvalue = 0.;
             for (i = 0; i <= filter_l; ++i) {
-                var j2 = i + j - filter_l / 2;
+		/* force integer index */
+                var j2 = Math.floor(i + j - filter_l / 2); 
                 var y;
                 assert(j2 < len);
                 assert(j2 + BLACKSIZE >= 0);
