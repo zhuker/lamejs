@@ -383,7 +383,7 @@ public class Quantize {
 				continue;
 
 			Arrays.sort(work, j - width, width);
-			if (BitStream.EQ(work[j - 1], 0.0f))
+			if (BitStream.Companion.EQ(work[j - 1], 0.0f))
 				continue; /* all zero sfb */
 
 			allowedNoise = (1.0f - distort[sfb]) * l3_xmin[sfb];
@@ -392,7 +392,7 @@ public class Quantize {
 			do {
 				float noise;
 				for (nsame = 1; start + nsame < width; nsame++)
-					if (BitStream.NEQ(work[start + j - width], work[start + j
+					if (BitStream.Companion.NEQ(work[start + j - width], work[start + j
 							+ nsame - width]))
 						break;
 
@@ -406,7 +406,7 @@ public class Quantize {
 				allowedNoise -= noise;
 				start += nsame;
 			} while (start < width);
-			if (BitStream.EQ(trancateThreshold, 0.0f))
+			if (BitStream.Companion.EQ(trancateThreshold, 0.0f))
 				continue;
 
 			do {
@@ -483,7 +483,7 @@ public class Quantize {
 			better = calc.over_count < best.over_count
 					|| (calc.over_count == best.over_count && calc.over_noise < best.over_noise)
 					|| (calc.over_count == best.over_count
-							&& BitStream.EQ(calc.over_noise, best.over_noise) && calc.tot_noise < best.tot_noise);
+							&& BitStream.Companion.EQ(calc.over_noise, best.over_noise) && calc.tot_noise < best.tot_noise);
 			break;
 
 		case 8:
@@ -517,11 +517,11 @@ public class Quantize {
 			break;
 		case 5:
 			better = calc.over_noise < best.over_noise
-					|| (BitStream.EQ(calc.over_noise, best.over_noise) && calc.tot_noise < best.tot_noise);
+					|| (BitStream.Companion.EQ(calc.over_noise, best.over_noise) && calc.tot_noise < best.tot_noise);
 			break;
 		case 6:
 			better = calc.over_noise < best.over_noise
-					|| (BitStream.EQ(calc.over_noise, best.over_noise) && (calc.max_noise < best.max_noise || (BitStream
+					|| (BitStream.Companion.EQ(calc.over_noise, best.over_noise) && (calc.max_noise < best.max_noise || (BitStream.Companion
 							.EQ(calc.max_noise, best.max_noise) && calc.tot_noise <= best.tot_noise)));
 			break;
 		case 7:

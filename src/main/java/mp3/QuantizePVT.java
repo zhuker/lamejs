@@ -612,7 +612,7 @@ public class QuantizePVT {
 		if (cod_info.block_type != Encoder.SHORT_TYPE) {
 			// NORM, START or STOP type, but not SHORT
 			int k = 576;
-			while (k-- != 0 && BitStream.EQ(xr[k], 0)) {
+			while (k-- != 0 && BitStream.Companion.EQ(xr[k], 0)) {
 				max_nonzero = k;
 			}
 		}
