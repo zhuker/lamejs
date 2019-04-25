@@ -283,7 +283,7 @@ public class LameEncoder {
 		id3.setModules(bs, ver);
 		p.setModules(lame);
 		qu.setModules(bs, rv, qupvt, tak);
-		qupvt.setModules(tak, rv, lame.enc.psy);
+		qupvt.setModules(tak, rv, lame.getEnc().psy);
 		rv.setModules(bs);
 		tak.setModules(qupvt);
 		vbr.setModules(lame, bs, ver);
