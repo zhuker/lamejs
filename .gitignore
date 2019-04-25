@@ -6,3 +6,5 @@ target/*
 .project
 .classpath
 node_modules
+.DS_Store
+generated_java.mp3

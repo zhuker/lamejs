@@ -238,7 +238,7 @@ public class Main {
 					tmp_num_channels, 16);
 		/* unknown size, so write maximum 32 bit signed value */
 
-		double wavsize = -(skip_start + skip_end);
+		long wavsize = -(skip_start + skip_end);
 		parse.mp3input_data.totalframes = parse.mp3input_data.nsamp
 				/ parse.mp3input_data.framesize;
 

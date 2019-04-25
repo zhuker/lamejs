@@ -1038,7 +1038,7 @@ public class GetAudio {
 				e.printStackTrace();
 				return -1; /* failed */
 			}
-			buf[2] &= 127;
+			buf[2] = (byte) (buf[2] & 127);
 			buf[3] &= 127;
 			buf[4] &= 127;
 			buf[5] &= 127;

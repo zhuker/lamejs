@@ -301,7 +301,7 @@ public class LameEncoder {
 		if (outSampleRate>=0)
 			gfp.out_samplerate = outSampleRate;
 		if (mode != CHANNEL_MODE_AUTO) {
-			gfp.mode = Enum.valueOf(MPEGMode.class, chmode2string(mode));
+			gfp.mode = mode(mode);
 		}
 		if (VBR) {
 			gfp.VBR = VbrMode.vbr_default;
@@ -610,7 +610,7 @@ public class LameEncoder {
 		return def;
 	}
 
-	private String chmode2string(int chmode) {
+	public static String chmode2string(int chmode) {
 		if (chmode == CHANNEL_MODE_STEREO) {
 			return "stereo";
 		} else if (chmode == CHANNEL_MODE_JOINT_STEREO) {
@@ -624,6 +624,23 @@ public class LameEncoder {
 		}
 		return "auto";
 	}
+
+	public static MPEGMode mode(int chmode) {
+
+		if (chmode == CHANNEL_MODE_STEREO) {
+			return MPEGMode.STEREO;
+		} else if (chmode == CHANNEL_MODE_JOINT_STEREO) {
+			return MPEGMode.JOINT_STEREO;
+		} else if (chmode == CHANNEL_MODE_DUAL_CHANNEL) {
+			return MPEGMode.DUAL_CHANNEL;
+		} else if (chmode == CHANNEL_MODE_MONO) {
+			return MPEGMode.MONO;
+		} else if (chmode == CHANNEL_MODE_AUTO) {
+			return MPEGMode.NOT_SET;
+		}
+		return MPEGMode.NOT_SET;
+	}
+
 
 	private int string2chmode(String chmode, int def) {
 		if (chmode.equals("stereo")) {
