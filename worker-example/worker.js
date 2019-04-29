@@ -38,7 +38,7 @@
       }
     }
 
-    mp3Encoder = new lamejs.Mp3Encoder(wav.channels, wav.sampleRate, config.bitRate || 96);
+    mp3Encoder = new lamejs.Mp3Encoder({channels : wav.channels, samplerate : wav.sampleRate, kbps : config.bitRate || 96});
 
     var remaining = samplesLeft.length;
     for (var i = 0; remaining >= maxSamples; i += maxSamples) {

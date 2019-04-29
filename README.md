@@ -22,7 +22,7 @@ $ npm install lamejs
 <script>
 var mp3Data = [];
 
-var mp3encoder = new lamejs.Mp3Encoder(1, 44100, 128); //mono 44.1khz encode to 128kbps
+var mp3encoder = new lamejs.Mp3Encoder({channels : 1, samplerate : 44100, kbps : 128}); //mono 44.1khz encode to 128kbps
 var samples = new Int16Array(44100); //one second of silence replace that with your own samples
 var mp3Tmp = mp3encoder.encodeBuffer(samples); //encode mp3
 
@@ -62,7 +62,7 @@ Either see [example.html](https://github.com/zhuker/lamejs/blob/master/example.h
 channels = 1; //1 for mono or 2 for stereo
 sampleRate = 44100; //44.1khz (normal mp3 samplerate)
 kbps = 128; //encode 128kbps mp3
-mp3encoder = new lamejs.Mp3Encoder(channels, sampleRate, kbps);
+mp3encoder = new lamejs.Mp3Encoder({channels : channels, samplerate : sampleRate, kbps : kbps});
 var mp3Data = [];
 
 samples = new Int16Array(44100); //one second of silence (get your data from the source you have)
@@ -95,7 +95,7 @@ If you want to encode stereo mp3 use separate sample buffers for left and right 
 ```javascript
 <script src='lame.all.js'></script>
 <script>
-mp3encoder = new lamejs.Mp3Encoder(2, 44100, 128);
+mp3encoder = new lamejs.Mp3Encoder({channels : 2, samplerate : 44100, kbps : 128});
 var mp3Data = [];
 
 left = new Int16Array(44100); //one second of silence (get your data from the source you have)

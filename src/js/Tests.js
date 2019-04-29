@@ -56,7 +56,7 @@ function testStereo44100() {
     assert(remaining1 == remaining2);
     assert(w1.sampleRate == w2.sampleRate);
 
-    var lameEnc = new Mp3Encoder(2, w1.sampleRate, 128);
+    var lameEnc = new Mp3Encoder({channels : 2, samplerate : w1.sampleRate, kbps : 128});
     var maxSamples = 1152;
 
     var time = new Date().getTime();
