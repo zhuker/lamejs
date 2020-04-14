@@ -92,6 +92,15 @@ System.arraycopy = function (src, srcPos, dest, destPos, length) {
         dest[destPos++] = src[srcPos++];
 };
 
+System.out = {};
+System.out.println = function (message) {
+    console.log(message);
+}
+
+System.out.printf = function () {
+    console.log.apply(console, arguments);
+}
+
 
 var Util = {};
 Util.SQRT2 = 1.41421356237309504880;
