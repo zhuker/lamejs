@@ -15,6 +15,7 @@ var new_int_n = common.new_int_n;
 var assert = common.assert;
 
 function Presets() {
+    var Lame = require('./Lame.js');
     function VBRPresets(qual, comp, compS,
                         y, shThreshold, shThresholdS,
                         adj, adjShort, lower,
