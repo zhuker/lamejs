@@ -30,6 +30,7 @@ BitStream.NEQ = function (a, b) {
 };
 
 function BitStream() {
+    var Lame = require('./Lame.js');
     var self = this;
     var CRC16_POLYNOMIAL = 0x8005;
 
