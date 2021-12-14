@@ -26,6 +26,7 @@ var Tables = require('./Tables.js');
 var Encoder = require('./Encoder.js');
 
 function Lame() {
+    var MPEGMode = require('./MPEGMode.js');
     var self = this;
     var LAME_MAXALBUMART = (128 * 1024);
 
