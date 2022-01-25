@@ -50,7 +50,7 @@ QuantizePVT.LARGE_BITS = 100000;
 QuantizePVT.IXMAX_VAL = 8206;
 
 function QuantizePVT() {
-
+    var BitStream = require('./BitStream.js');
     var tak = null;
     var rv = null;
     var psy = null;
