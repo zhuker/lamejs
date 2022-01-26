@@ -119,3 +119,15 @@ if (mp3buf.length > 0) {
 console.log(mp3Data);
 </script>
 ```
+
+# Usage with Float32Array / AudioBuffer
+
+Some libraries (such as `AudioBuffer.getChannelData()` from the WebAudio API) provide audio data as a `Float32Array` with values between `-1.0` and `1.0`. lamejs expects values between `-32768` and `32767`, so the values have to be mapped:
+
+```javascript
+var floatSamples = new Float32Array(44100); // Float sample from an external source
+var samples = new Int32Array(floatSamples.length);
+for (var i = 0; i < floatSamples.length; i++) {
+  samples[i] = floatSamples[i] < 0 ? floatSamples[i] * 32768 : floatSamples[i] * 32767;
+}
+```
