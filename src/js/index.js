@@ -63,13 +63,14 @@ function ID3Tag() {
     }
 }
 
-function Mp3Encoder(channels, samplerate, kbps) {
-    if (arguments.length != 3) {
-        console.error('WARN: Mp3Encoder(channels, samplerate, kbps) not specified');
-        channels = 1;
-        samplerate = 44100;
-        kbps = 128;
-    }
+function Mp3Encoder(config) {
+    config = Object.assign({
+        channels : 1,
+        samplerate : 44100,
+        kbps : 128,
+        quality : 3
+    }, config);
+
     var lame = new Lame();
     var gaud = new GetAudio();
     var ga = new GainAnalysis();
@@ -99,11 +100,11 @@ function Mp3Encoder(channels, samplerate, kbps) {
 
     var gfp = lame.lame_init();
 
-    gfp.num_channels = channels;
-    gfp.in_samplerate = samplerate;
-    gfp.brate = kbps;
+    gfp.num_channels = config.channels;
+    gfp.in_samplerate = config.samplerate;
+    gfp.brate = config.kbps;
     gfp.mode = MPEGMode.STEREO;
-    gfp.quality = 3;
+    gfp.quality = config.quality;
     gfp.bWriteVbrTag = false;
     gfp.disable_reservoir = true;
     gfp.write_id3tag_automatic = false;
@@ -115,7 +116,7 @@ function Mp3Encoder(channels, samplerate, kbps) {
     var mp3buf = new_byte(mp3buf_size);
 
     this.encodeBuffer = function (left, right) {
-        if (channels == 1) {
+        if (config.channels == 1) {
             right = left;
         }
         assert(left.length == right.length);

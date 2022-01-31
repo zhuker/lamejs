@@ -5,7 +5,7 @@
 <script>
     function encodeMono(channels, sampleRate, samples) {
         var buffer = [];
-        var mp3enc = new lamejs.Mp3Encoder(channels, sampleRate, 128);
+        var mp3enc = new lamejs.Mp3Encoder({channels : channels, samplerate : sampleRate, kbps : 128});
         var remaining = samples.length;
         var maxSamples = 1152;
         for (var i = 0; remaining >= maxSamples; i += maxSamples) {
