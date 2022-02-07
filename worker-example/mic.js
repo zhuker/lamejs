@@ -25,6 +25,7 @@
     var microphone, processor;
     // Function that handles getting audio out of the browser's media API.
     function beginRecording(stream) {
+      context = context || new AudioContext();
       // Set up Web Audio API to process data from the media stream (microphone).
       microphone = context.createMediaStreamSource(stream);
       // Settings a bufferSize of 0 instructs the browser to choose the best bufferSize
