@@ -63,7 +63,6 @@ channels = 1; //1 for mono or 2 for stereo
 sampleRate = 44100; //44.1khz (normal mp3 samplerate)
 kbps = 128; //encode 128kbps mp3
 mp3encoder = new lamejs.Mp3Encoder(channels, sampleRate, kbps);
-var mp3Data = [];
 
 samples = new Int16Array(44100); //one second of silence (get your data from the source you have)
 sampleBlockSize = 1152; //can be anything but make it a multiple of 576 to make encoders life easier
