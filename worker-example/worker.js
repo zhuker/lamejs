@@ -41,15 +41,16 @@
     mp3Encoder = new lamejs.Mp3Encoder(wav.channels, wav.sampleRate, config.bitRate || 96);
 
     var remaining = samplesLeft.length;
-    for (var i = 0; remaining >= maxSamples; i += maxSamples) {
-      var left = samplesLeft.subarray(i, i + maxSamples);
+    for (var i = 0; remaining > 0; i += maxSamples) {
+      const chunkSize = Math.min(maxSamples, remaining);
+      var left = samplesLeft.subarray(i, i + chunkSize);
       var right;
       if (samplesRight) {
-        right = samplesRight.subarray(i, i + maxSamples);
+        right = samplesRight.subarray(i, chunkSize);
       }
       var mp3buf = mp3Encoder.encodeBuffer(left, right);
       appendToBuffer(mp3buf);
-      remaining -= maxSamples;
+      remaining -= chunkSize;
       self.postMessage({
         cmd: 'progress',
         progress: (1 - remaining / samplesLeft.length)
